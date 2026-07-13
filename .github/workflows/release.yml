@@ -1,0 +1,46 @@
+# Creates a GitHub Release with eqgfx.zip attached whenever a v* tag is
+# pushed:
+#   git tag v0.1.0 && git push origin v0.1.0
+# Needs no secrets - GITHUB_TOKEN is built in (permissions below).
+
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Build Zip File
+        # The zip is the lua/eqgfx install bundle (unzip into <MQ>/lua). The
+        # native side ships as the MQEQGFX plugin DLL built by the MacroQuest
+        # tree (not from this repo), so src/ and CMakeLists stay out. Staged
+        # from repo/lua/eqgfx plus the top-level docs; test/ and docs/hidden/
+        # are dev-only.
+        run: |
+          mkdir stage
+          cp -r repo/lua/eqgfx stage/eqgfx
+          rm -rf stage/eqgfx/test
+          cp -r repo/docs stage/eqgfx/docs
+          rm -rf stage/eqgfx/docs/hidden
+          cp repo/README.md repo/CHANGELOG.md repo/LICENSE "repo/List of available windows.md" stage/eqgfx/
+          cd stage && zip -rq ../eqgfx.zip eqgfx
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${{ github.ref_name }}" eqgfx.zip
+          --repo "${{ github.repository }}"
+          --title "${{ github.ref_name }}"
+          --generate-notes

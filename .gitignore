@@ -1,0 +1,9 @@
+# MSVC build intermediates (the MQEQGFX plugin DLL itself is built by the
+# MacroQuest tree's build, out of this repo)
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.dll
+.luarc.json
