@@ -84,6 +84,8 @@ local ImGuiStub = setmetatable({
   ColorConvertFloat4ToU32 = function() return 0x7f7f7f7f end,
   GetMousePos = function() return 50, 50 end,
   IsMouseDown = function() return false end,
+  IsMouseClicked = function() return false end,
+  IsWindowHovered = function() return false end,
   Text = function() end, TextDisabled = function() end,
   Separator = function() end, SameLine = function() end,
   SetNextWindowPos = function() end, SetNextWindowSize = function() end,
@@ -105,6 +107,7 @@ rawset(_G, 'ImGui', ImGuiStub)
 rawset(_G, 'ImVec2', function(x, y) return { x = x, y = y } end)
 rawset(_G, 'ImGuiWindowFlags', setmetatable({}, { __index = function() return 1 end }))
 rawset(_G, 'ImGuiMouseButton', setmetatable({}, { __index = function() return 1 end }))
+rawset(_G, 'ImGuiHoveredFlags', setmetatable({}, { __index = function() return 4 end }))
 
 -- ===== occlusion-mode stubs: one NPC spawn + one open InventoryWindow =====
 local W2S = { x = 300, y = 300 }   -- projection result, mutated by the test

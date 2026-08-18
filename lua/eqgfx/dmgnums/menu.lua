@@ -121,6 +121,22 @@ function M.draw()
 		check("Outgoing on current target only", cfg, "targetOnly")
 		check("Hide numbers behind EQ windows", cfg, "hideUnderUI")
 
+		if ImGui.CollapsingHeader("Distance scaling") then
+			check("Shrink numbers with distance", cfg.distScale, "enabled")
+			if cfg.distScale.enabled then
+				slideri("Full size out to", cfg.distScale, "near", 0, 300)
+				slideri("Smallest at", cfg.distScale, "far", 20, 600)
+				sliderf("Smallest size", cfg.distScale, "minScale", 0.1, 1.0, "%.2f x")
+				ImGui.TextDisabled("(measured when the number spawns, on top of damage scaling)")
+			end
+		end
+
+		if ImGui.CollapsingHeader("Idle") then
+			check("Stop while EverQuest is in the background", cfg.pause, "whenBackground")
+			check("Stop while the frame limiter isn't rendering", cfg.pause, "whenNotRendering")
+			ImGui.TextDisabled("(combat events keep draining, so nothing replays on resume)")
+		end
+
 		if ImGui.CollapsingHeader("Filters") then
 			ImGui.TextDisabled("who (rows) x what (columns)")
 			for _, src in ipairs(GRID_SOURCES) do

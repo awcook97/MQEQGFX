@@ -1,5 +1,31 @@
 # Changelog
 
+### Added
+
+- **Nameplates: line-of-sight filter.** `/npmenu` → "Line of sight" only
+  plates spawns you can actually see. Your group, raid, extended targets,
+  pet, fellowship and current target each have their own exemption toggle so
+  the things you track *because* they're out of sight keep their plate; your
+  own plate is never hidden. The raycast answer is cached per spawn
+  (0.25s by default) so a crowd in range doesn't stall the discovery loop.
+- **Distance scaling** for nameplates and damage numbers: full size out to a
+  near distance, shrinking to a floor at a far one. Plates scale as a whole -
+  bar, name, HP %, buff icons and cast bar together.
+- **Nameplates: click a plate to target that spawn** (`/npmenu` → "Click a
+  plate to target that spawn", off by default). The topmost plate under the
+  cursor wins; clicks owned by an ImGui window or landing on a native EQ
+  window are left alone.
+- **Nameplates: overlap handling** for clustered spawns (`/npmenu` →
+  "Overlap"). *Separate* pushes colliding plates apart vertically; *Stack*
+  collapses each cluster into one column under its most important member.
+  Your own plate and your target's never move.
+- **Idle gate** in all three example scripts (`/npmenu`, `/dnmenu`, `/aemenu`
+  → "Idle"): stop drawing while the frame limiter isn't rendering the scene
+  (on by default) or while EverQuest isn't the foreground window (off by
+  default, since a backgrounded window may still be one you're watching).
+  Nameplates also skip the spawn scan while paused; damage numbers keep
+  draining the combat feed so resuming doesn't replay a backlog.
+
 ### Changed
 
 - Heals and hits now go through separate report paths. `poll_damage()` events

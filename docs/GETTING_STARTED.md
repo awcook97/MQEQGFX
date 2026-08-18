@@ -66,9 +66,52 @@ toggleable) gets a plate that tracks it frame-accurately:
   caster, hover tooltips, and right-click spell inspection.
 - **Target styling**: your current target's plate can scale up and get its
   own border color and glow.
+- **Click to target**: left-clicking a plate targets that spawn by ID. Off by
+  default; the toggle is at the top of `/npmenu`. Clicks that belong to an
+  ImGui window or a native EQ window are left alone.
 - **Animations** everywhere, all optional: fade in/out, damage flash, appear
   pop, HP smoothing, sheen sweeps, low-HP heartbeat, breathing, border glow,
   idle bob. Per-plate phase offsets keep a crowd from pulsing in lockstep.
+
+### Line of sight
+
+`/npmenu` → **Line of sight** limits plates to the spawns you can actually
+see. What you deliberately track *because* it's out of sight keeps its plate:
+your group, your raid, your extended targets, your pet, your fellowship and
+your current target each have their own exemption toggle, and your own plate
+is never hidden. A spawn that drops out of sight fades out like anything that
+leaves range and pops back when you can see it again.
+
+The visibility raycast isn't free with a crowd in range, so each spawn's
+answer is cached; "Re-check every" sets that interval (0.25s by default).
+
+### Crowds: distance scaling, separating, stacking
+
+Three settings deal with a screen full of spawns:
+
+- **Distance scaling** shrinks the whole plate — bar, name, HP %, buff icons
+  and cast bar together — from full size at a near distance down to a floor
+  at a far one, so a crowd reads as depth rather than a wall of identical
+  plates.
+- **Overlap → Separate** keeps every plate at its own X and pushes colliding
+  ones down until they clear each other.
+- **Overlap → Stack** collapses each cluster of plates into a single tidy
+  column: the most important plate of the cluster keeps its position and the
+  rest line up underneath it. "Cluster radius" is how close two plates have
+  to project before they count as the same clump.
+
+Your own plate and your target's are never displaced by either mode.
+
+### Pausing when nothing is on screen
+
+`/npmenu` → **Idle** stops the whole feature while EverQuest isn't rendering
+(the frame limiter has stopped drawing the scene) or, optionally, whenever
+the window isn't in the foreground. Drawing and the spawn scan both stop;
+plates keep their state and come straight back. The same two toggles are in
+`/dnmenu` and `/aemenu`.
+
+Only the "not rendering" toggle is on by default: a backgrounded window that
+is still rendering is one you may well be watching while boxing.
 
 ![a plate with buff icons, an anonymized name and an interrupted cast](../assets/interrupted.png)
 
@@ -140,6 +183,12 @@ others, incoming) and by kind, scale text with damage, abbreviate big
 numbers, show spell names: all in `/dnmenu`. `/dmgnums` toggles the numbers,
 and `/dntest` pops one sample of every category over your target for tuning.
 
+Numbers can also shrink with distance (`/dnmenu` → **Distance scaling**),
+measured when the number spawns and applied on top of the damage scaling, and
+the same **Idle** toggles as the nameplates stop drawing when nothing is on
+screen — the combat feed keeps draining while paused, so resuming doesn't
+replay a backlog.
+
 ---
 
 ## Settings and save scopes
@@ -163,7 +212,9 @@ written only when something changed.
 
 - **`/npdebug`** prints a full health report: render capabilities, the plugin
   build stamp, the native UI scan state (`ui sweep`, `ui rects` lines),
-  buff scan results for your target, and any AE areas currently in flight.
+  buff scan results for your target, any AE areas currently in flight, and
+  the state of the idle gate, the line-of-sight filter, distance scaling and
+  overlap handling.
   The plugin also has its own `/eqgfx` status line (build stamp, render
   callback health, sweep counters) that works without any Lua running.
 - **Plates draw over a window?** `/npui` lists every window the scan sees;

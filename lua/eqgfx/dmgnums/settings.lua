@@ -20,6 +20,18 @@ local DEFAULTS = {
 	hideUnderUI = false,  -- suppress numbers whose anchor sits behind an open EQ window
 	zOffset     = 5.0,    -- world units above the spawn's head
 
+	pause = {                    -- stop drawing when nobody can see the numbers
+		whenBackground   = false,  -- backgrounded but still rendering: boxers watch those windows
+		whenNotRendering = true,   -- the frame limiter has stopped drawing the scene
+	},
+
+	distScale = {          -- numbers shrink with distance to the spawn they float over
+		enabled  = false,
+		near     = 30,       -- world units still drawn at full size
+		far      = 200,      -- world units where minScale is reached
+		minScale = 0.55,
+	},
+
 	-- WHO x WHAT filters — the in-game filter grid. Sources: mine (me), pet
 	-- (my pet/merc), others (everyone else's combat), incoming (dealt TO me).
 	show = {

@@ -24,6 +24,10 @@ local DEFAULTS = {
   radius        = 250,
   groundOffset  = 5.0,
   debugRadius   = 40,
+  pause = {                      -- stop drawing when nobody can see the areas
+    whenBackground   = false,    -- backgrounded but still rendering: boxers watch those windows
+    whenNotRendering = true,     -- the frame limiter has stopped drawing the scene
+  },
   colors = {
     enemyFill  = { 1.00, 0.51, 0.51, 0.27 },
     enemyLine  = { 1.00, 0.24, 0.24, 0.86 },

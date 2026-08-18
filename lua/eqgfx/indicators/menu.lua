@@ -12,13 +12,14 @@ function M.toggle() M.open = not M.open end
 
 local function mark() settings.mark_dirty() end
 
---- Checkbox bound to a top-level settings key; marks dirty on change.
+--- Checkbox bound to a settings key; marks dirty on change.
 ---@param label string
----@param key string # key in settings.data
-local function check(label, key)
-  local cfg = settings.data or {}
-  local v, pressed = ImGui.Checkbox(label, cfg[key])
-  if pressed then cfg[key] = v; mark() end
+---@param key string # key within `tbl`
+---@param tbl table|nil # settings subtable (default: the top level)
+local function check(label, key, tbl)
+  local t = tbl or settings.data or {}
+  local v, pressed = ImGui.Checkbox(label, t[key])
+  if pressed then t[key] = v; mark() end
 end
 
 --- Keep colors as plain number tables (pickle-safe) regardless of what the
@@ -92,6 +93,10 @@ function M.draw()
     check('Generic marker (unknown spell)', 'genericMarker')
     check('Debug ring',            'showDebugRing')
     ImGui.Separator()
+    if ImGui.CollapsingHeader('Idle') then
+      check('Stop while EverQuest is in the background', 'whenBackground', cfg.pause)
+      check("Stop while the frame limiter isn't rendering", 'whenNotRendering', cfg.pause)
+    end
     if ImGui.CollapsingHeader('Colors') then
       color('Enemy fill',      'enemyFill')
       color('Enemy outline',   'enemyLine')

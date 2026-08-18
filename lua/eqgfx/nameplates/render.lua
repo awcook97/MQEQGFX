@@ -380,9 +380,13 @@ local function hz_pulse(timeNow, hz, phase)
 end
 
 --- Mouse position, tolerant of binding differences (two numbers vs ImVec2).
+---
+--- ```lua
+--- local mx, my = render.mouse_pos()
+--- ```
 ---@return number|nil x # nil when unavailable
 ---@return number|nil y
-local function mouse_pos()
+function R.mouse_pos()
   local okk, alpha, b = pcall(ImGui.GetMousePos)
   if not okk then return end
   if type(alpha) == 'number' then return alpha, b end
@@ -597,7 +601,7 @@ end
 local function draw_buff_row(drawList, cfg, list, rowCfg, geom, alpha, timeNow)
   if not list or #list == 0 or rowCfg.position == BP.HIDDEN then return end
   local buffCfg = cfg.buffs
-  local size, gap = buffCfg.iconSize, buffCfg.spacing
+  local size, gap = buffCfg.iconSize * geom.scale, buffCfg.spacing * geom.scale
   local n = math.min(#list, buffCfg.maxIcons)
   local horiz = rowCfg.direction == BD.HORIZONTAL
   local per = math.max(1, buffCfg.maxPerRow)
@@ -624,7 +628,7 @@ local function draw_buff_row(drawList, cfg, list, rowCfg, geom, alpha, timeNow)
   end
 
   local mx, my
-  if buffCfg.tooltip or buffCfg.rightClickInspect then mx, my = mouse_pos() end
+  if buffCfg.tooltip or buffCfg.rightClickInspect then mx, my = R.mouse_pos() end
 
   for i = 1, n do
     local entry = list[i]
@@ -726,15 +730,17 @@ end
 ---@param phase number # per-plate phase offset
 local function cast_bar(drawList, cfg, castInfo, cx, geom, w, alpha, timeNow, phase)
   local castCfg, colors = cfg.castbar, cfg.colors
-  local h  = castCfg.height
+  local h  = castCfg.height * geom.scale
+  local ts = castCfg.textSize * geom.scale
+  local isz = castCfg.iconSize * geom.scale
   local cw = w * castCfg.widthScale
   local x0, x1 = cx - cw * 0.5, cx + cw * 0.5
-  local y0 = geom.bottom + castCfg.gap
+  local y0 = geom.bottom + castCfg.gap * geom.scale
   local y1 = y0 + h
-  geom.left   = math.min(geom.left, x0 - (castCfg.showIcon and castCfg.iconSize + 3 or 0))
+  geom.left   = math.min(geom.left, x0 - (castCfg.showIcon and isz + 3 or 0))
   geom.right  = math.max(geom.right, x1)
   geom.bottom = math.max(geom.bottom, y1 + ((castCfg.showSpellName or castCfg.showTime)
-                                            and 1 + text_height(castCfg.textSize) or 0))
+                                            and 1 + text_height(ts) or 0))
   -- cast math runs on the tracker's real clock (spell durations are wall
   -- seconds); visuals (sheen) stay on the frame timebase
   local castNow = casts.now()
@@ -742,7 +748,6 @@ local function cast_bar(drawList, cfg, castInfo, cx, geom, w, alpha, timeNow, ph
 
   -- spell icon, vertically centered on the bar, left of it
   if castCfg.showIcon and not castInfo.interrupted then
-    local isz = castCfg.iconSize
     draw_spell_icon(drawList, x0 - isz - 3, (y0 + y1 - isz) * 0.5, isz,
                     castInfo.spellIcon, colors.castFill, alpha)
   end
@@ -754,7 +759,7 @@ local function cast_bar(drawList, cfg, castInfo, cx, geom, w, alpha, timeNow, ph
     drawList:AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), u32(colors.castBack, alpha), cfg.bar.rounding)
     drawList:AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), u32(colors.castInterrupt, alpha * 0.8), cfg.bar.rounding)
     if castCfg.showSpellName then
-      text(drawList, x0 + 1, y1 + 1, colors.castInterrupt, alpha, 'Interrupted', castCfg.textSize)
+      text(drawList, x0 + 1, y1 + 1, colors.castInterrupt, alpha, 'Interrupted', ts)
     end
     return
   end
@@ -774,7 +779,6 @@ local function cast_bar(drawList, cfg, castInfo, cx, geom, w, alpha, timeNow, ph
   end
 
   local ty = y1 + 1
-  local ts = castCfg.textSize
   if castCfg.showSpellName and castInfo.spellName then
     text(drawList, x0 + 1, ty, colors.castText, alpha, castInfo.spellName, ts)
     geom.right = math.max(geom.right, x0 + 1 + text_width(castInfo.spellName, ts))
@@ -793,8 +797,13 @@ end
 
 --- Draw one complete nameplate at its projected position: glow rings,
 --- border, HP bar (with AE-highlight tint), resource bars, HP % text, name,
---- buff rows, cast bar. Records the actual drawn footprint into plate.ext
---- (relative to sx/sy) for next frame's native-UI occlusion test.
+--- buff rows, cast bar. Drawn at sx/sy shifted by the declutter offset
+--- (ox/oy) and sized by plate.dscale, which shrinks the whole plate - bar,
+--- text, icons and cast bar - with distance.
+---
+--- Records the drawn footprint into plate.ext (relative to the draw anchor)
+--- for next frame's native-UI occlusion test, and the bar+name rect into
+--- plate.hit (absolute pixels) for click-to-target.
 ---
 --- ```lua
 --- -- inside the overlay window's draw pass:
@@ -818,11 +827,12 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
   end
   if alpha <= 0.01 then return end
 
-  local scale = plate.scale * (onTarget and targetCfg.scale or 1)
+  local dscale = plate.dscale or 1
+  local scale = plate.scale * (onTarget and targetCfg.scale or 1) * dscale
   local w = cfg.bar.width  * scale
   local h = cfg.bar.height * scale
-  local cx = plate.sx or 0   -- guaranteed by callers; defaulted for the analyzer
-  local cy = plate.sy or 0
+  local cx = (plate.sx or 0) + (plate.ox or 0)  -- sx/sy guaranteed by callers; defaulted for the analyzer
+  local cy = (plate.sy or 0) + (plate.oy or 0)
   local baseY = cy           -- plate.ext is recorded relative to (cx, baseY)
   if cfg.anim.bob then
     cy = cy + math.sin((timeNow + phase) * cfg.anim.bobSpeed * 2 * math.pi) * cfg.anim.bobAmount
@@ -905,7 +915,10 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
     bottom = y1 + bt + 1,    -- grows downward
     left   = x0 - bt,        -- grows leftward
     right  = x1 + bt,        -- grows rightward
+    scale  = dscale,
   }
+
+  local hit = { x0 - bt, y0 - bt, x1 + bt, y1 + bt }   -- click-to-target rect, grown to cover the name
 
   -- thin mana / endurance bars directly under the HP bar
   local RH = cfg.resources.height
@@ -923,7 +936,7 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
   -- HP % text, positionable
   if cfg.hp.showPct then
     local str = string.format('%d%%', math.floor(plate.dispHp * 100 + 0.5))
-    local ts  = cfg.hp.textSize
+    local ts  = cfg.hp.textSize * dscale
     local HT  = types.HpTextPos
     local hpPos = cfg.hp.textPos
     local tw = text_width(str, ts)
@@ -960,7 +973,8 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
     elseif cfg.name.anim == NA.RAINBOW then
       nameC = hsv_color(((timeNow * cfg.name.animSpeed * 0.15) + phase) % 1, 0.75, 1, colors.name[4])
     end
-    local ts = (pos == NP.INSIDE) and math.min(cfg.name.size, h + 4) or cfg.name.size
+    local nameSize = cfg.name.size * dscale
+    local ts = (pos == NP.INSIDE) and math.min(nameSize, h + 4) or nameSize
     local tw2, th2 = text_width(label, ts), text_height(ts)
     local tx = cx - tw2 * 0.5 + cfg.name.offsetX
     local ty
@@ -981,6 +995,8 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
     local bgPad = cfg.name.background and cfg.name.bgPadding or 0
     geom.left  = math.min(geom.left, tx - bgPad)
     geom.right = math.max(geom.right, tx + tw2 + bgPad)
+    hit[1], hit[2] = math.min(hit[1], tx), math.min(hit[2], ty)
+    hit[3], hit[4] = math.max(hit[3], tx + tw2), math.max(hit[4], ty + th2)
     draw_name_text(drawList, cfg, colors, label, tx, ty, ts, nameC, nameA, timeNow, phase)
   end
 
@@ -993,6 +1009,7 @@ function R.plate(drawList, cfg, plate, castInfo, timeNow, isTarget)
   -- actual drawn footprint, relative to the projected anchor - init.lua uses
   -- it next frame to occlude/clip the plate against native EQ window rects
   plate.ext = { geom.left - cx, geom.top - baseY, geom.right - cx, geom.bottom - baseY }
+  plate.hit = hit
 end
 
 return R

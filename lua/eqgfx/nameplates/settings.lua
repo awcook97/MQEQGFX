@@ -23,6 +23,40 @@ local DEFAULTS = {
   hideUnderUI = true,   -- occlude plates behind open EQ windows
   uiOccludeMode = types.UiOccludeMode.CLIP,  -- clip plates around windows, or hide them whole
   extraWindows = {},    -- additional EQ window names for occlusion (/npui add)
+  clickTarget = false,  -- left-click a plate to target that spawn
+
+  pause = {                      -- stop drawing when nobody can see the plates
+    whenBackground   = false,    -- backgrounded but still rendering: boxers watch those windows
+    whenNotRendering = true,     -- the frame limiter has stopped drawing the scene
+  },
+
+  los = {                 -- plates only for spawns you can actually see
+    enabled  = false,
+    interval = 0.25,      -- seconds between line-of-sight re-checks per spawn
+    exempt = {            -- these keep their plate through walls
+      group      = true,
+      raid       = true,
+      xtarget    = true,
+      pet        = true,
+      fellowship = true,
+      target     = true,
+    },
+  },
+
+  distScale = {           -- plates shrink with distance (bar, text, icons together)
+    enabled  = false,
+    near     = 30,        -- world units still drawn at full size
+    far      = 200,       -- world units where minScale is reached
+    minScale = 0.55,
+  },
+
+  overlap = {             -- what happens when plates land on top of each other
+    mode          = types.PlateOverlapMode.OFF,
+    gap           = 2,    -- minimum vertical pixels between two plates
+    xPad          = 4,    -- horizontal slack when testing for a collision
+    maxPush       = 160,  -- cap on how far one plate may be displaced
+    clusterRadius = 45,   -- STACK: anchors this close form one column
+  },
 
   -- Which spawn TYPES get plates. Auras, objects, totems, corpses, traps and
   -- other non-creature spawns never do.

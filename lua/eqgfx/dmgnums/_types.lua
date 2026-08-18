@@ -36,8 +36,10 @@ T.Kind = { MELEE = 'melee', SPELLS = 'spells', DOTS = 'dots', HEALS = 'heals', M
 ---@field sub string|nil    optional second line (spell name)
 ---@field color number[]    {r,g,b,a}
 ---@field size number       font px at scale 1
+---@field dscale number     distance multiplier (already in size; also sizes the spell-name line)
 ---@field bornAt number     frame-time the floater spawned
 ---@field dx number         horizontal spread offset (px)
+---@field dy0 number        burst-stack spawn offset (px above the anchor)
 ---@field vx number         horizontal velocity (px/s, ARC/FOUNTAIN)
 ---@field vy number         initial vertical velocity (px/s, ARC/FOUNTAIN)
 ---@field sx number|nil     last projected screen x (fallback when spawn dies)

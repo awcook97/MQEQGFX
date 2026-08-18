@@ -62,6 +62,8 @@ Three example scripts ship with the plugin. They are fully usable as is, and the
 
 Each has an in-game settings menu (`/npmenu`, `/aemenu`, `/dnmenu`). Nothing is configured in files.
 
+Nameplates and damage numbers both shrink with distance, and all three scripts stop drawing when the client isn't rendering (or, optionally, isn't in the foreground). Nameplates add a line-of-sight filter with per-category exemptions (group, raid, extended targets, pet, fellowship, target), click-a-plate-to-target, and two ways to deal with a crowd of plates landing on top of each other: push them apart, or collapse each cluster into one column.
+
 ![nameplates](assets/nameplates.png) ![interrupted cast](assets/interrupted.png)
 
 ### Commands

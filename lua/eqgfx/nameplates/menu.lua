@@ -142,6 +142,7 @@ function M.draw(caps)
 		ImGui.Separator()
 		check("Enabled", cfg, "enabled")
 		slideri("Radius", cfg, "radius", 20, 500)
+		check("Click a plate to target that spawn", cfg, "clickTarget")
 		check("Occlude plates behind EQ windows", cfg, "hideUnderUI")
 		if cfg.hideUnderUI then
 			combo("Behind-window style", cfg, "uiOccludeMode", types.UiOccludeModeLabels)
@@ -155,6 +156,50 @@ function M.draw(caps)
 		check("Show PCs", cfg.show, "pcs")
 		check("Show pets & mercs", cfg.show, "pets")
 		check("Show yourself", cfg.show, "self")
+
+		if ImGui.CollapsingHeader("Line of sight") then
+			check("Only plate spawns you can see", cfg.los, "enabled")
+			if cfg.los.enabled then
+				sliderf("Re-check every", cfg.los, "interval", 0.05, 2.0, "%.2f s")
+				ImGui.Text("Keep the plate through walls for")
+				check("My group", cfg.los.exempt, "group")
+				check("My raid", cfg.los.exempt, "raid")
+				check("Extended targets", cfg.los.exempt, "xtarget")
+				check("My pet", cfg.los.exempt, "pet")
+				check("My fellowship", cfg.los.exempt, "fellowship")
+				check("My target", cfg.los.exempt, "target")
+				ImGui.TextDisabled("(your own plate is never hidden by this)")
+			end
+		end
+
+		if ImGui.CollapsingHeader("Distance scaling") then
+			check("Shrink plates with distance", cfg.distScale, "enabled")
+			if cfg.distScale.enabled then
+				slideri("Full size out to", cfg.distScale, "near", 0, 300)
+				slideri("Smallest at", cfg.distScale, "far", 20, 600)
+				sliderf("Smallest size", cfg.distScale, "minScale", 0.1, 1.0, "%.2f x")
+				ImGui.TextDisabled("(bar, name, HP %, buffs and cast bar shrink together)")
+			end
+		end
+
+		if ImGui.CollapsingHeader("Overlap") then
+			combo("When plates collide", cfg.overlap, "mode", types.PlateOverlapModeLabels)
+			if cfg.overlap.mode ~= types.PlateOverlapMode.OFF then
+				slideri("Vertical gap", cfg.overlap, "gap", 0, 20)
+				slideri("Horizontal slack", cfg.overlap, "xPad", 0, 40)
+				slideri("Maximum shift", cfg.overlap, "maxPush", 20, 400)
+				if cfg.overlap.mode == types.PlateOverlapMode.STACK then
+					slideri("Cluster radius", cfg.overlap, "clusterRadius", 10, 200)
+				end
+				ImGui.TextDisabled("(your own plate and your target's never move)")
+			end
+		end
+
+		if ImGui.CollapsingHeader("Idle") then
+			check("Stop while EverQuest is in the background", cfg.pause, "whenBackground")
+			check("Stop while the frame limiter isn't rendering", cfg.pause, "whenNotRendering")
+			ImGui.TextDisabled("(drawing and the spawn scan pause; plates keep their state)")
+		end
 
 		if ImGui.CollapsingHeader("Bar") then
 			combo("Texture", cfg.bar, "texture", types.BarTextureLabels)

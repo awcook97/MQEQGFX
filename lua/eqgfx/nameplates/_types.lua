@@ -69,6 +69,11 @@ T.HpTextPosLabels = { 'Inside left', 'Inside center', 'Inside right',
 T.ResScope = { OFF = 1, SELF = 2, GROUP = 3, PCS = 4, ALL = 5 }
 T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything' }
 
+---@enum PlateOverlapMode  what happens when plates land on top of each other
+T.PlateOverlapMode = { OFF = 1, SEPARATE = 2, STACK = 3 }
+T.PlateOverlapModeLabels = { 'Off (plates overlap)', 'Separate (push apart)',
+                             'Stack (one column per cluster)' }
+
 ----------------------------------------------------------------------------
 -- Configuration classes. nameplates/settings.lua's DEFAULTS literal is
 -- checked against these (---@type NameplatesConfig), so the class and the
@@ -80,6 +85,26 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 ---@field pcs boolean
 ---@field pets boolean # pets & mercenaries
 ---@field self boolean # your own plate
+
+---@class NpLosExemptCfg     who keeps a plate without line of sight
+---@field group boolean
+---@field raid boolean
+---@field xtarget boolean
+---@field pet boolean # my pet
+---@field fellowship boolean
+---@field target boolean
+
+---@class NpLosCfg           line-of-sight plate filter
+---@field enabled boolean
+---@field interval number # seconds between line-of-sight re-checks per spawn
+---@field exempt NpLosExemptCfg
+
+---@class NpOverlapCfg       screen-space declutter for clustered plates
+---@field mode PlateOverlapMode
+---@field gap number # minimum vertical pixels left between two plates
+---@field xPad number # horizontal slack when testing whether two plates collide
+---@field maxPush number # cap on how far one plate may be displaced, pixels
+---@field clusterRadius number # STACK: anchors this close (pixels) form one column
 
 ---@class NpBarCfg           the HP bar body
 ---@field width number # pixels
@@ -247,6 +272,11 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 ---@field hideUnderUI boolean # occlude plates behind open EQ windows
 ---@field uiOccludeMode UiOccludeMode
 ---@field extraWindows string[] # extra occlusion window names (/npui add)
+---@field clickTarget boolean # left-click a plate to target that spawn
+---@field pause PauseCfg # stop drawing while backgrounded / not rendering
+---@field los NpLosCfg
+---@field distScale DistScaleCfg # plates shrink with distance
+---@field overlap NpOverlapCfg
 ---@field show NpShowCfg
 ---@field bar NpBarCfg
 ---@field hp NpHpCfg
@@ -259,6 +289,13 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 ---@field anim NpAnimCfg
 ---@field colors NpColors
 
+---@class PlateJob           one plate queued for this frame's draw pass
+---@field plate Plate
+---@field castInfo CastInfo|nil # cast bar to draw beneath it
+---@field isTarget boolean # this plate is my current target
+---@field hits number[][]|nil # EQ window rects it overlaps (CLIP mode)
+---@field bbox number[]|nil # its padded bbox {x0,y0,x1,y1} (CLIP mode)
+
 ---@class PlateGeom          per-side layout cursors while drawing one plate
 ---@field x0 number # bar rect left
 ---@field y0 number # bar rect top
@@ -269,6 +306,7 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 ---@field bottom number # grows downward
 ---@field left number # grows leftward
 ---@field right number # grows rightward
+---@field scale number # text/icon size multiplier (distance scaling)
 
 ---@class Plate
 ---@field id integer
@@ -283,6 +321,10 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 ---@field flashAt number|nil  damage flash start (frame timebase)
 ---@field sx number|nil       last projected screen x (fade-out anchor)
 ---@field sy number|nil       last projected screen y
+---@field ox number|nil       declutter offset x, pixels (overlap handling)
+---@field oy number|nil       declutter offset y, pixels
+---@field dscale number|nil   distance size multiplier 0..1
+---@field hit number[]|nil    clickable rect {x0,y0,x1,y1}, absolute screen px
 ---@field dist number|nil     squared 3D distance to me (draw-order sort)
 ---@field isPC boolean|nil    spawn type PC?
 ---@field isSelf boolean|nil  this is my own plate

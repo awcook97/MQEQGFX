@@ -42,6 +42,7 @@ local core = require('eqgfx.core._types')
 ---@field radius number # cast detection radius, world units
 ---@field groundOffset number # how far below reported Z to draw areas
 ---@field debugRadius number # /aering ring radius
+---@field pause PauseCfg # stop drawing while backgrounded / not rendering
 ---@field colors IndicatorsColors
 
 local T = {}

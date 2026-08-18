@@ -28,10 +28,12 @@ local eqgfx = require('eqgfx')
 local ImGui = require('ImGui')
 local log   = require('eqgfx.lib.lwlogger')
 
-local types    = require('eqgfx.dmgnums._types')
-local settings = require('eqgfx.dmgnums.settings')
-local menu     = require('eqgfx.dmgnums.menu')
-local uirects  = require('eqgfx.lib.uirects')
+local types     = require('eqgfx.dmgnums._types')
+local settings  = require('eqgfx.dmgnums.settings')
+local menu      = require('eqgfx.dmgnums.menu')
+local uirects   = require('eqgfx.lib.uirects')
+local distscale = require('eqgfx.lib.distscale')
+local pause     = require('eqgfx.lib.pause')
 
 log.SetAppName('eqgfx')
 log.SetModuleName('dmgnums')
@@ -161,8 +163,9 @@ local function fmt_amount(cfg, n)
   return tostring(n)
 end
 
---- Turn one classified event into a live floater.
-local function spawn_floater(cfg, source, kind, anchorID, ev)
+--- Turn one classified event into a live floater. `dist` is how far the
+--- anchor spawn is, for the distance size falloff (nil = full size).
+local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
   local text, sub
   if kind == types.Kind.MISSES then
     text = cfg.missLabels[ev.damage] or types.MissCodes[ev.damage] or 'MISS'
@@ -182,6 +185,8 @@ local function spawn_floater(cfg, source, kind, anchorID, ev)
     local f = clamp01(ev.damage / math.max(cfg.text.bigAt, 1))
     size = size * (1 + (cfg.text.bigScale - 1) * f)
   end
+  local dscale = distscale.factor(cfg.distScale, dist)
+  size = size * dscale
 
   -- burst nudge: numbers landing on the same spawn in quick succession start higher
   local nudge = 0
@@ -209,7 +214,7 @@ local function spawn_floater(cfg, source, kind, anchorID, ev)
     spawnID = anchorID,
     text = text, sub = sub,
     color = color_for(cfg, source, kind),
-    size = size,
+    size = size, dscale = dscale,
     bornAt = animNow,
     dx = (math.random() * 2 - 1) * cfg.anim.spreadX,
     dy0 = nudge,
@@ -231,7 +236,7 @@ local function handle_event(ev, cfg, myID, petID, tgtID)
   local spawn = mq.TLO.Spawn(anchorID)
   local dist = (spawn.ID() == anchorID) and spawn.Distance3D() or nil
   if dist and dist <= cfg.radius then
-    spawn_floater(cfg, source, kind, anchorID, ev)
+    spawn_floater(cfg, source, kind, anchorID, ev, dist)
   end
 end
 
@@ -384,7 +389,7 @@ local function draw_floaters(drawList, cfg)
         if not (cfg.hideUnderUI and under_ui(x, y)) then
           draw_text(drawList, cfg, x, y, size, f.color, alpha, f.text)
           if f.sub then
-            draw_text(drawList, cfg, x, y + size + 1, cfg.text.spellNameSize,
+            draw_text(drawList, cfg, x, y + size + 1, cfg.text.spellNameSize * (f.dscale or 1),
               cfg.colors.spellName, alpha, f.sub)
           end
         end
@@ -400,7 +405,7 @@ local function draw()
   animNow = animNow + FRAME_DT
   local cfg = settings.data or {}
 
-  if cfg.enabled then
+  if cfg.enabled and not pause.active(cfg.pause) then
     local sw, sh = eqgfx.get_screen()
     if not sw or sw <= 0 then sw, sh = 4096, 2160 end
     ImGui.SetNextWindowPos(0, 0)
@@ -419,8 +424,8 @@ local function draw()
       end
     end
     ImGui.End()
-  elseif #floaters > 0 then
-    floaters = {}
+  else
+    if #floaters > 0 then floaters = {} end
     eqgfx.poll_damage()   -- keep draining so re-enable doesn't burst-replay
   end
 

@@ -33,6 +33,7 @@ local render   = require('eqgfx.indicators.render')
 local menu     = require('eqgfx.indicators.menu')
 local casts    = require('eqgfx.casts')
 local uirects  = require('eqgfx.lib.uirects')
+local pause    = require('eqgfx.lib.pause')
 
 log.SetAppName('eqgfx')
 log.SetModuleName('indicators')
@@ -121,6 +122,10 @@ end
 --- clipped to the screen-minus-windows regions (or unclipped when the
 --- native scan / clipping is unavailable). Also renders the menu.
 local function draw()
+  if pause.active((settings.data or {}).pause) then
+    menu.draw()
+    return
+  end
   local drawList = ImGui.GetBackgroundDrawList()
   if canClip == nil then
     canClip = pcall(function()
