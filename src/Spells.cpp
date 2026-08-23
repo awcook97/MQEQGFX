@@ -30,6 +30,9 @@ void OnCastStart(int spellId, int spawnId, uint32_t castTimeMs)
 	CDisplay* display = pDisplay.get();
 	uint32_t timestamp = display ? display->TimeStamp : 0;
 
+	// The unit frames want the start instant, not a poll a pulse later.
+	UnitsNoteCastStart(spellId, spawnId, castTimeMs);
+
 	std::scoped_lock lock(s_castMutex);
 	if (s_castEvents.size() >= kMaxCastEvents)
 		s_castEvents.erase(s_castEvents.begin());

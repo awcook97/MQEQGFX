@@ -12,6 +12,11 @@ add_library(MQEQGFX SHARED
     src/CombatNumbers.cpp
     src/Models.cpp
     src/Spells.cpp
+    src/Highlight.cpp
+    src/Units.cpp
+    src/gpu/LineFX.cpp
+    src/gpu/FxCatalog.cpp
+    src/gpu/FxCamera.cpp
     src/model/pfs.cpp
     src/model/eqg.cpp
     src/model/wld.cpp

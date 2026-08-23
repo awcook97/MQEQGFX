@@ -29,6 +29,7 @@ project overview, see the [top-level README](../README.md).
 |-----|--------------|
 | [CORE_API.md](CORE_API.md) | The API guide: write your own scripts. Projection, the two drawing models, occlusion clipping, combat event feeds, and the shared cast-tracking / settings libs. Runnable examples throughout. |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Install, first run, a tour of the example scripts, settings, troubleshooting. |
+| [UNITS.md](UNITS.md) | Unit frames, secondary target, extended target window, and `/attarget` — cast at a group member, XTarget, or whatever the mouse is over without changing your target. |
 | [DEVELOPING.md](DEVELOPING.md) | Architecture, building the plugin inside the MacroQuest tree, engine facts, and conventions. Read this before changing plugin sources. |
 
 ---

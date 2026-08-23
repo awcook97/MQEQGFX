@@ -840,6 +840,11 @@ void SkinModel(const eqgfx::eqg::Model& base, const std::vector<std::array<float
 // it with ImGui::Image. Render thread.
 PLUGIN_API void OnUpdateImGui()
 {
+	// MQ allows one OnUpdateImGui per plugin, and the model window below bails
+	// out early when it is closed - so the unit frames have to be driven from
+	// here rather than from their own hook.
+	DrawUnitsUI();
+
 	if (!s_showModel.load(std::memory_order_relaxed))
 		return;
 	if (!gbDeviceAcquired || gpD3D11Device == nullptr)

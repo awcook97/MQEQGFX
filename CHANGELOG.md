@@ -2,6 +2,46 @@
 
 ### Added
 
+- **highlight: per-NPC ambient animation.** Every NPC in line of sight can be
+  given its own idle effect. The default mode draws a **signature animation
+  per class** — sixteen of them, one for each EQ class, in **World of Warcraft
+  class colors** mapped onto the closest EQ analogue (Bard, Beastlord and
+  Berserker have no WoW counterpart and take its item-quality colors). A
+  random mode instead hashes a style and palette color out of each spawn ID,
+  so the crowd varies while any one spawn animates smoothly. Line-of-sight
+  filtered, capped, nearest-first, and off by default.
+- **highlight: cast animations.** Every cast gets an animation whose shape
+  comes from the spell's real footprint via `spell_geom` — beam, cone (through
+  its actual angles), caster-centered shockwave, target-centered collapse,
+  single-target bolt, self column — and whose color comes from what the spell
+  does: the configured heal color for beneficial, resist-type colors for
+  detrimental. Casts animate while the bar fills, burst on landing, and unwind
+  when interrupted.
+- **highlight: a shared frame budget.** All the world drawing shares one
+  segment cap, served role markers → cast effects → ambient, so a crowded zone
+  degrades by thinning decoration instead of dropping what matters. `/hlmenu`
+  shows it as a live bar.
+- **New example script: `/lua run eqgfx/highlight`.** Recolors your target's
+  3D model by what it is — purple for whatever the main assist is targeting,
+  blue for players, gold for pets, red for an NPC that is currently
+  aggressive, white for one that is not — and draws an animated line figure
+  around the main tank (counter-rotating great circles with comet heads
+  chasing around them, inside a breathing ground ring) and the main assist (a
+  double helix rising out of a spinning triangle, brightness flowing upward).
+  `/hlmenu` has the full settings window: per-role colors, tint/glow mode,
+  marker shapes, speeds, segment counts and save scope, plus a status panel
+  reporting which spawns the group/raid role lookups resolved to and a test
+  mode that draws both markers on you. `/hl`, `/hl markers`, `/hl tints` and
+  `/hl test` toggle the pieces from chat.
+- **Model highlighting.** `eqgfx.highlight(spawnID, color[, mode])` recolors a
+  spawn's actual 3D model through the engine's per-actor material state — a
+  tint multiplied into every material (`mode` 1), a constant ambient that
+  reads as a glow (2), or both (3). `unhighlight()`, `clear_highlights()` and
+  `highlights()` manage them; `/eqgfx highlight` applies one to your target
+  for a quick look. Highlights live outside the retained scene, so `clear()`
+  leaves them alone; they are dropped on despawn, zone and plugin unload.
+  Note that removing one writes back neutral defaults rather than the previous
+  values, which resets dyed armor on PCs until their model reloads.
 - **Nameplates: line-of-sight filter.** `/npmenu` → "Line of sight" only
   plates spawns you can actually see. Your group, raid, extended targets,
   pet, fellowship and current target each have their own exemption toggle so
@@ -27,6 +67,24 @@
   draining the combat feed so resuming doesn't replay a backlog.
 
 ### Changed
+
+- **The retained scene is double buffered.** `add_*` now writes a buffer the
+  render thread is not reading, and `clear()` swaps it in. Previously the
+  scene mutex was taken and released once per primitive, so the render
+  callback could — and routinely did — fire part way through a rebuild and
+  draw a half-built scene. That was visible as flicker on anything animated.
+  Scripts need no change: `clear()` is the frame boundary, and the scene is
+  one build behind, which is not perceptible. `present()` publishes without
+  starting a new build (for a scene you set up once), and `blank()` empties
+  both buffers immediately (for pausing, where `clear()` alone would leave the
+  last frame up for one more pass). Locking dropped from once per line to once
+  per frame as a side effect.
+- **World segments are clipped at the camera's near plane instead of being
+  dropped.** Previously `add_line`/`add_circle`/`add_arc` discarded any
+  segment with an endpoint behind the camera, so a ring you were standing
+  inside lost the part that passed behind you. The visible portion is now
+  drawn, with the cut found by bisecting the segment against the camera's
+  own projection test.
 
 - Heals and hits now go through separate report paths. `poll_damage()` events
   now track crit/lucky/twincast damage events and healing events so test the

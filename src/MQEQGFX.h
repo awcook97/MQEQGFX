@@ -9,11 +9,13 @@
 #include "model/eqg.h"
 #include "model/dds.h"
 #include "model/render.h"
+#include "gpu/LineFX.h"
 
 #include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -127,3 +129,88 @@ extern std::atomic<bool>        s_reloadModel;  // ImGui asks main thread to reb
 bool BuildModelView(const std::string& armor, std::string& src, std::string& note);
 void DumpCharCommand();
 void DumpModelCommand();
+
+// ---------------------------------------------------------------------------
+// Model highlighting (Highlight.cpp): recolor a spawn's actual 3D model via
+// the engine's per-actor material state. Driven from OnPulse; Lua setters
+// only record intent. See Highlight.cpp for why the vtable is called by hand.
+
+enum : uint32_t
+{
+	Highlight_Tint    = 0x1,   // multiply a color into every material
+	Highlight_Ambient = 0x2,   // add a constant ambient - reads as a glow
+};
+
+constexpr size_t kMaxHighlights = 256;
+
+void SetSpawnHighlight(int spawnId, uint32_t color, uint32_t mode);
+void ClearSpawnHighlight(int spawnId);
+void ClearAllHighlights();
+int  HighlightCount();
+void PulseHighlights();               // apply/reap - every pulse
+void RefreshHighlights();             // rewrite after material rebuilds - slow cadence
+void OnHighlightSpawnRemoved(int spawnId);
+void ForgetHighlights();              // zoning: drop without restoring
+
+// id, color, mode, applied 
+std::vector<std::tuple<int, uint32_t, uint32_t, bool>> HighlightList();
+
+// ---------------------------------------------------------------------------
+// Unit frames (Units.cpp): a WoW-style secondary target ("focus") plus hover
+// healing - cast at whoever the mouse is over without giving up your target.
+//
+// The whole feature rests on one fact about the client, established by reading
+// CharacterZoneClient::CastSpell (eqgame 0x1400DD130): the outgoing cast packet
+// (opcode 0xead6) carries the target's spawn ID, snapshotted from the global
+// pTarget at the moment of the call -
+//
+//     if (pinstTarget == NULL) hdr.targetId = 0;
+//     else                     hdr.targetId = pinstTarget->SpawnID;
+//
+// - and nothing afterwards re-reads it. So a cast can be aimed at any spawn by
+// swapping pTarget, invoking the cast, and swapping straight back: the packet
+// is already on the wire by the time the call returns. No /target round trip,
+// no flicker, and the player keeps whatever they had selected.
+
+struct UnitCast
+{
+	int      spellId;
+	uint32_t startMs;      // EQGetTime() when the cast started
+	uint32_t castMs;       // total cast time reported by the client
+};
+
+void InitUnits();
+void ShutdownUnits();
+void PulseUnits();                       // expire cast bars, deferred retarget
+void DrawUnitsUI();                      // render thread, from OnUpdateImGui
+void OnUnitSpawnRemoved(int spawnId);
+
+/// Fed from the cast tap in Spells.cpp so the focus/hover cast bars start the
+/// instant the packet lands rather than a pulse later.
+void UnitsNoteCastStart(int spellId, int spawnId, uint32_t castTimeMs);
+
+/// World markers for the focus target, appended by PulseClassFx before it
+/// publishes. Keeping the submit vector owned in one place avoids a second
+/// producer racing the swap.
+void BuildUnitMarkers(std::vector<eqgfx::gpu::FxInstance>& out);
+
+/// Handles the /eqgfx sub-commands this file owns. Returns false if szCmd
+/// isn't one of ours, so the main dispatcher can carry on.
+bool UnitsCommand(const char* szCmd, const char* szLine);
+
+int  GetSecondaryTarget();
+void SetSecondaryTarget(int spawnId);
+int  GetHoverUnit();
+void SetHoverUnit(int spawnId);
+bool GetSpawnCast(int spawnId, UnitCast& out);
+
+/// Cast memorised gem `gem` (1-based) at `spawnId`. See the note above for why
+/// this does not disturb the player's target.
+bool CastAtSpawn(int spawnId, int gem);
+
+/// hover -> focus -> target, the WoW mouseover-macro fallback chain.
+int  ResolveCastUnit();
+
+/// /attarget <unit> <command> - run any target-consuming command against a
+/// chosen unit. The binding is deliberately the player's to create.
+void AtTargetCommand(PlayerClient* pChar, const char* szLine);

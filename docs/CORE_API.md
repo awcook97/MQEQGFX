@@ -66,8 +66,10 @@ Your main loop owns a little retained scene: `clear()` it, `add_*` what should
 exist right now, and the engine redraws it every frame until you change it.
 
 ```lua
-eqgfx.clear()
-eqgfx.add_circle(x, y, z, radius, color, segments)        -- ground ring (segments default 48)
+eqgfx.clear()                                              -- publish the built frame, start the next
+eqgfx.present()                                            -- publish without starting a new frame
+eqgfx.blank()                                              -- drop everything, this frame
+eqgfx.add_circle(x, y, z, radius, color, segments)         -- ground ring (segments default 48)
 eqgfx.add_arc(cx, cy, cz, radius, a0, a1, color, segments) -- a0/a1 in RADIANS
 eqgfx.add_line(x1,y1,z1, x2,y2,z2, color)                  -- world-space segment
 eqgfx.add_screen_line(x1,y1, x2,y2, color)                 -- raw pixels, no projection
@@ -76,8 +78,44 @@ eqgfx.set_thickness(px)                                    -- line half-width in
 ```
 
 Colors are `eqgfx.argb(a, r, g, b)` with 0–255 components; `eqgfx.abgr` is the
-byte-swapped variant for a client that wants the reversed order. A segment
-only draws while both endpoints are in front of the camera.
+byte-swapped variant for a client that wants the reversed order.
+
+#### The scene is double buffered
+
+`add_*` writes a buffer the renderer is not reading. `clear()` swaps that
+buffer in and starts a fresh one, so the engine only ever draws a scene
+somebody finished building.
+
+This matters because your script does not control when the render callback
+fires. With a single buffer it lands mid-rebuild — after your `clear()`, part
+way through your `add_*` calls — and draws a half-finished scene, which shows
+up as flicker. The usual loop needs no change:
+
+```lua
+while true do
+  eqgfx.clear()          -- publishes the previous pass, starts this one
+  eqgfx.add_circle(...)  -- built off-screen
+  eqgfx.add_line(...)
+end                      -- next clear() publishes it
+```
+
+The visible scene is one build behind, which you cannot see. Two variants for
+when `clear()` is the wrong boundary:
+
+| Call | Use it for |
+|---|---|
+| `present()` | a scene you build once and leave up — `add_*`, `present()`, stop |
+| `blank()` | tearing everything down *now* (pausing, switching off); `clear()` alone would not empty the screen until the pass after |
+
+World segments are clipped against the camera's near plane, so a shape only
+disappears once it is **entirely** behind you — a ring at your feet or a marker
+on someone you are standing next to stays whole. Nothing here depth-tests
+against the world, though: lines draw over terrain. If you need occlusion, do
+your own line-of-sight check and skip the segment.
+
+`set_thickness(px)` draws `2*px + 1` parallel copies of every segment, so it
+multiplies the engine draw calls. It is fine at 1–3 for a few hundred
+segments; keep an eye on it if you are drawing thousands.
 
 ### ImGui overlay
 
@@ -107,6 +145,81 @@ while true do mq.doevents() mq.delay(100) end
 
 The callback runs every frame; reading positions inside it is what makes
 drawings stick to moving spawns (the example scripts all do this).
+
+---
+
+## Model highlighting
+
+`highlight()` recolors a spawn's actual 3D model — not an overlay on top of
+it, the model itself. It is the one thing here that ImGui cannot reproduce.
+
+```lua
+eqgfx.highlight(spawnID, color)                        -- tint every material
+eqgfx.highlight(spawnID, color, eqgfx.HIGHLIGHT_AMBIENT) -- glow instead
+eqgfx.highlight(spawnID, color, 3)                     -- both
+eqgfx.unhighlight(spawnID)
+eqgfx.clear_highlights()
+eqgfx.highlights()   -- { {id=, color=, mode=, applied=}, ... }
+```
+
+Two modes, combinable as a bitmask:
+
+| Mode | Constant | Effect |
+|---|---|---|
+| `1` | `eqgfx.HIGHLIGHT_TINT` | multiplies the color into every material — recolors the model |
+| `2` | `eqgfx.HIGHLIGHT_AMBIENT` | adds a constant ambient — reads as a glow, keeps the original colors |
+
+Tint multiplies, so it can only darken toward a hue; a mob tinted pure red
+goes dark red, not neon. Ambient adds, so it brightens. `3` gives a lit,
+recolored model and is usually what you want for "make this stand out".
+
+Highlights are **not** part of the retained scene. `clear()` does not remove
+them — they persist until you call `unhighlight()`, the spawn despawns, you
+zone, or the plugin unloads. That is deliberate: a highlight is a property of
+a spawn, not a frame.
+
+```lua
+-- keep exactly the current target highlighted
+local lit
+while true do
+  local id = mq.TLO.Target.ID()
+  if id ~= lit then
+    if lit then eqgfx.unhighlight(lit) end
+    if id and id > 0 then eqgfx.highlight(id, eqgfx.argb(255, 255, 40, 40), 3) end
+    lit = id
+  end
+  mq.delay(100)
+end
+```
+
+### Caveats
+
+- **Restoring is approximate.** The engine has no getter for either value, so
+  removing a highlight writes back the neutral defaults (white tint, zero
+  ambient) rather than replaying what was there before. On an NPC that is
+  exact. On a **player with dyed armor**, un-highlighting resets the dye until
+  the model next reloads. Prefer highlighting NPCs.
+- Up to 256 highlights at once; further calls are ignored.
+- The look is written on the next plugin pulse, not instantly — `applied` in
+  `highlights()` tells you whether it has landed yet. A spawn whose model has
+  not streamed in yet stays unapplied until it does.
+- Equipment changes and LOD swaps rebuild materials underneath us; the plugin
+  rewrites every highlight on a slow cadence to cover that, so a highlight can
+  flicker off for a fraction of a second after a mob changes weapons.
+
+From the command line, `/eqgfx highlight` applies this to your current target
+(see the plugin commands in the README).
+
+`lua/eqgfx/highlight/` is the reference use of this API and of the world line
+primitives. Worth reading if you are writing your own effects:
+
+| File | What it shows |
+|---|---|
+| `shapes.lua` | the line vocabulary (rings, gyros, helices, arcs, streaks), per-segment shading, and a shared frame budget every layer honours |
+| `classanim.lua` | a signature animation per EQ class, built from that vocabulary |
+| `ambient.lua` | randomized-but-stable effects — parameters hashed from the spawn ID so a crowd varies while each spawn animates smoothly |
+| `castfx.lua` | driving animation shape from `spell_geom` and color from the spell's resist type |
+| `init.lua` | budget priority, throttled discovery, LoS caching, and diffing a cast tracker into start/land/interrupt events |
 
 ---
 
