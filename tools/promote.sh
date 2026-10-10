@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-src="${1:-dev-linux}"
+src="${1:-Linux_Version}"
 linux_only=(deploy.sh tools/promote.sh)
 
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -28,7 +28,7 @@ else
 	echo "main <- $src"
 fi
 
-for b in dev-windows dev-linux; do
+for b in dev-windows Linux_Version; do
 	if git show-ref --verify --quiet "refs/heads/$b"; then
 		git checkout -q "$b"
 		git merge -q --no-edit main
