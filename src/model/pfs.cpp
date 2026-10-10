@@ -15,9 +15,13 @@ static std::string lower(std::string s)
 	return s;
 }
 
+static constexpr uint32_t kMaxEntrySize = 256u << 20;
+
 bool Archive::ExtractEntry(const Entry& e, std::vector<uint8_t>& out) const
 {
 	out.clear();
+	if (e.size > kMaxEntrySize)
+		return false;
 	out.reserve(e.size);
 	size_t pos = e.offset;
 	while (out.size() < e.size)
@@ -30,10 +34,15 @@ bool Archive::ExtractEntry(const Entry& e, std::vector<uint8_t>& out) const
 		pos += 8;
 		if (pos + deflatedLen > m_file.size() || out.size() + inflatedLen > e.size)
 			return false;
+		if (inflatedLen == 0)
+		{
+			pos += deflatedLen;
+			continue;
+		}
 		size_t oldSize = out.size();
 		out.resize(oldSize + inflatedLen);
 		uLongf destLen = inflatedLen;
-		if (uncompress(&out[oldSize], &destLen, &m_file[pos], deflatedLen) != Z_OK || destLen != inflatedLen)
+		if (uncompress(out.data() + oldSize, &destLen, &m_file[pos], deflatedLen) != Z_OK || destLen != inflatedLen)
 			return false;
 		pos += deflatedLen;
 	}
@@ -47,8 +56,14 @@ bool Archive::Open(const std::string& path)
 	m_names.clear();
 	m_nameToIdx.clear();
 
-	FILE* f = fopen(path.c_str(), "rb");
-	if (!f)
+	auto fail = [this]() {
+		std::vector<uint8_t>().swap(m_file);
+		m_entries.clear();
+		return false;
+	};
+
+	FILE* f = nullptr;
+	if (fopen_s(&f, path.c_str(), "rb") != 0 || !f)
 		return false;
 	fseek(f, 0, SEEK_END);
 	long sz = ftell(f);
@@ -58,35 +73,35 @@ bool Archive::Open(const std::string& path)
 	size_t rd = fread(m_file.data(), 1, m_file.size(), f);
 	fclose(f);
 	if (rd != m_file.size())
-		return false;
+		return fail();
 
 	uint32_t dirOffset, magic;
 	std::memcpy(&dirOffset, &m_file[0], 4);
 	std::memcpy(&magic, &m_file[4], 4);
-	if (magic != 0x20534650u)              // "PFS "
-		return false;
+	if (magic != 0x20534650u)
+		return fail();
 	if (static_cast<size_t>(dirOffset) + 4 > m_file.size())
-		return false;
+		return fail();
 
 	uint32_t count;
 	std::memcpy(&count, &m_file[dirOffset], 4);
 	size_t p = dirOffset + 4;
+	if (count > (m_file.size() - p) / 12)
+		return fail();
 	m_entries.reserve(count);
 	for (uint32_t i = 0; i < count; ++i)
 	{
 		if (p + 12 > m_file.size())
-			return false;
-		Entry e;                            // [0]=crc (unused), [4]=offset, [8]=size
+			return fail();
+		Entry e;
 		std::memcpy(&e.offset, &m_file[p + 4], 4);
 		std::memcpy(&e.size, &m_file[p + 8], 4);
 		m_entries.push_back(e);
 		p += 12;
 	}
 	if (m_entries.empty())
-		return false;
+		return fail();
 
-	// Classic S3D: the name list is the entry with the highest offset, and its
-	// names correspond 1:1 to the other entries in offset order.
 	std::sort(m_entries.begin(), m_entries.end(),
 		[](const Entry& a, const Entry& b) { return a.offset < b.offset; });
 

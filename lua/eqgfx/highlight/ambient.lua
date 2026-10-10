@@ -1,24 +1,3 @@
---[[
-  highlight/ambient.lua - a randomized but stable idle animation for every NPC
-  you can see.
-
-  RANDOM, NOT RANDOMIZED-PER-FRAME
-  --------------------------------
-  Everything that makes one NPC's effect different from its neighbour's -
-  which style it gets, its palette color, phase, speed, radius, tilt - is
-  derived from the spawn ID through shapes.hash(). That is the whole trick:
-  the crowd looks hand-varied, but any single mob animates smoothly because
-  its parameters never change. Rolling math.random() per frame would strobe.
-
-  Each style is deliberately cheap. The per-NPC segment count is the budget
-  divided by the crowd size (init.lua does the division), and every style
-  honours it, so a busy zone degrades into simpler figures instead of blowing
-  the frame.
-
-  Styles are picked from the enabled set in settings, so turning one off
-  redistributes the crowd across the rest.
-]]
-
 local S = require('eqgfx.highlight.shapes')
 
 local sin, cos, pi = math.sin, math.cos, math.pi
@@ -27,8 +6,6 @@ local TAU = pi * 2
 
 local M = {}
 
---- Style ids in a stable order. The per-spawn pick indexes the *enabled*
---- subset, so a spawn keeps its look as long as the enabled set is unchanged.
 ---@type string[]
 M.STYLES = { 'orbit', 'halo', 'motes', 'spiral', 'bloom' }
 
@@ -48,11 +25,6 @@ M.STYLE_HINTS = {
 	bloom  = 'rings expanding outward from the feet and fading',
 }
 
-----------------------------------------------------------------------------
--- Per-spawn parameters. Salts are arbitrary but must stay fixed, or every
--- NPC in the zone changes appearance when this file is edited.
-----------------------------------------------------------------------------
-
 ---@class AmbientParams
 ---@field style string
 ---@field color RGBA
@@ -62,7 +34,6 @@ M.STYLE_HINTS = {
 ---@field tilt number    # radians, styles that lean
 ---@field dir number     # 1 or -1, rotation direction
 
---- Derive one NPC's stable look.
 ---@param id integer         # spawn ID
 ---@param cfg table          # settings.data.ambient
 ---@param enabled string[]   # style ids currently switched on
@@ -80,17 +51,8 @@ function M.params(id, cfg, enabled)
 	}
 end
 
-----------------------------------------------------------------------------
--- Styles
---
--- Each takes the spawn's feet position, its params, the shared config, a
--- segment allowance and the animation clock. `segs` is already the per-NPC
--- share of the frame budget; treat it as the total to spend.
-----------------------------------------------------------------------------
-
 local styles = {}
 
---- Two tilted rings orbiting the torso, counter-rotating, comet head on each.
 function styles.orbit(x, y, z, p, cfg, segs, now)
 	local r = cfg.radius * p.radius
 	local mid = z + cfg.height * 0.5
@@ -101,7 +63,6 @@ function styles.orbit(x, y, z, p, cfg, segs, now)
 		p.color, (p.phase + 0.5 - t * 0.21) % 1)
 end
 
---- A ring overhead: slow spin, radius breathing, brightest at the head.
 function styles.halo(x, y, z, p, cfg, segs, now)
 	local t = now * cfg.speed * p.speed * p.dir
 	local breathe = 0.85 + 0.25 * sin(t * 1.1 + p.phase * TAU)
@@ -109,15 +70,11 @@ function styles.halo(x, y, z, p, cfg, segs, now)
 		max(8, segs), p.color, (p.phase + t * 0.18) % 1)
 end
 
---- Fireflies: short dashes on independent orbits at different radii and
---- heights. The most "alive" of the set and the cheapest per unit of motion.
 function styles.motes(x, y, z, p, cfg, segs, now)
 	local t = now * cfg.speed * p.speed
 	local count = max(2, min(cfg.moteCount, floor(segs / 3)))
 	local per = max(2, floor(segs / count))
 	for i = 1, count do
-		-- Each mote gets its own orbit from the spawn id and its index, so
-		-- they never line up into a visible ring.
 		local seed = i * 977
 		local rr = cfg.radius * p.radius * S.randrange(i, seed, 0.45, 1.15)
 		local hh = cfg.height * S.randrange(i, seed + 1, 0.15, 1.0)
@@ -129,7 +86,6 @@ function styles.motes(x, y, z, p, cfg, segs, now)
 	end
 end
 
---- A helix winding up the body, twist travelling upward.
 function styles.spiral(x, y, z, p, cfg, segs, now)
 	local t = now * cfg.speed * p.speed
 	local turns = 2
@@ -138,15 +94,12 @@ function styles.spiral(x, y, z, p, cfg, segs, now)
 		max(4, floor(segs / turns)), p.color, (p.phase + t * 0.25) % 1)
 end
 
---- Rings expanding out of the feet and fading as they go. Staggered so there
---- is always one mid-flight.
 function styles.bloom(x, y, z, p, cfg, segs, now)
 	local t = now * cfg.speed * p.speed
 	local waves = 2
 	local per = max(8, floor(segs / waves))
 	for i = 1, waves do
 		local u = ((t * 0.5 + p.phase + (i - 1) / waves) % 1)
-		-- Ease out: fast at first, then drifting.
 		local grow = 1 - (1 - u) * (1 - u)
 		S.flat_ring(x, y, z + 0.15 + u * cfg.height * 0.25,
 			cfg.radius * p.radius * (0.25 + grow * 1.35),
@@ -154,7 +107,6 @@ function styles.bloom(x, y, z, p, cfg, segs, now)
 	end
 end
 
---- Draw one NPC's ambient effect.
 ---@param x number @param y number @param z number # spawn feet position
 ---@param p AmbientParams
 ---@param cfg table       # settings.data.ambient

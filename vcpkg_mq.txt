@@ -1,0 +1,4 @@
+luajit
+sol2
+zlib
+nlohmann-json

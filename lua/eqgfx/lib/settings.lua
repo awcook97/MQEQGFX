@@ -1,153 +1,42 @@
---[[
-  lib/settings.lua - scoped, persisted settings shared by eqgfx features.
-
-  Files live under  <config>/eqgfx/ :
-      global_settings.lua                 all servers, all characters
-      <Server>_settings.lua               every character on one server
-      <Server>_<Name>_settings.lua        one character
-
-  Each file is a plain `return { <section> = {...}, ... }` table; features
-  store their settings under their own section key (nameplates, indicators),
-  so all features share the same three files.
-
-  Scope ("save for: character / server / global") is implicit in WHERE the
-  section is found: load checks character -> server -> global and saving
-  writes back to that level. Picking a broader scope in a menu removes the
-  section from the more specific files so the broader one takes effect.
-
-  Reading uses loadfile (quiet when the file doesn't exist yet); writing uses
-  our own stable serializer (sorted keys), since mq.pickle wants paths
-  relative to the config dir and can't read-modify-write shared files.
-
-  Usage:
-    local Store = require('eqgfx.lib.settings')
-    local settings = Store.new{ section = 'nameplates', defaults = DEFAULTS }
-    settings.load()
-    settings.data.foo = 42; settings.mark_dirty()
-    settings.maybe_save(log)               -- saves only when dirty
-    settings.set_scope('server')           -- 'char' | 'server' | 'global'
-]]
-
 local mq = require('mq')
 
 local M = {}
 
-M.SCOPES = { 'char', 'server', 'global' }
+M.SCOPES = { 'char', 'class', 'global' }
 M.SCOPE_LABELS = {
   char   = 'This character',
-  server = 'This server',
+  class  = 'This class',
   global = 'All characters',
 }
 
-local DIR = mq.configDir .. '/eqgfx'
+local SAVE_QUIET_MS = 500
 
 local function sanitize(s)
-  return tostring(s or 'unknown'):gsub('[^%w_%-]', '')
+  return (tostring(s or 'unknown'):gsub('[^%w_%-]', ''))
 end
 
-local function safe_tlo(fn)
-  local okk, v = pcall(fn)
-  if okk and v and v ~= '' and v ~= 'NULL' then return v end
-  return nil
+---@param scope string # 'char' | 'class' | 'global'
+---@return string file
+local function file_for(scope)
+  if scope == 'global' then return 'eqgfx/global_settings.lua' end
+  if scope == 'class' then return 'eqgfx/class_' .. sanitize(mq.TLO.Me.Class.ShortName()) .. '_settings.lua' end
+  return 'eqgfx/' .. sanitize(mq.TLO.EverQuest.Server()) .. '_' .. sanitize(mq.TLO.Me.CleanName()) .. '_settings.lua'
 end
 
---- Settings file path for a scope (char/server names read live from TLOs).
----@param scope string # 'char' | 'server' | 'global'
----@return string path # absolute file path under <config>/eqgfx/
-local function path_for(scope)
-  if scope == 'global' then return DIR .. '/global_settings.lua' end
-  local server = sanitize(safe_tlo(function() return mq.TLO.EverQuest.Server() end))
-  if scope == 'server' then return DIR .. '/' .. server .. '_settings.lua' end
-  local name = sanitize(safe_tlo(function() return mq.TLO.Me.CleanName() end))
-  return DIR .. '/' .. server .. '_' .. name .. '_settings.lua'
-end
-M.path_for = path_for
-
-local function ensure_dir()
-  pcall(function() require('lfs').mkdir(DIR) end)
-  -- belt and braces if lfs is unavailable: cmd-style mkdir (no-op if exists)
-  if not io.open(DIR .. '/.exists', 'a') then
-    pcall(os.execute, 'mkdir "' .. DIR:gsub('/', '\\') .. '"')
-  else
-    os.remove(DIR .. '/.exists')
-  end
-end
-
---- Read a settings file -> table, or nil (quietly) if missing/invalid.
----@param path string
+---@param path string # absolute path
 ---@return table|nil settings
-local function read_file(path)
-  local chunk = loadfile(path)
+local function load_table(path)
+  local chunk = loadfile(path, 't', {})
   if not chunk then return nil end
-  local okk, t = pcall(chunk)
-  if okk and type(t) == 'table' then return t end
+  local ok, t = pcall(chunk)
+  if ok and type(t) == 'table' then return t end
   return nil
 end
-M.read_file = read_file
 
-----------------------------------------------------------------------------
--- Stable serializer (plain tables: string/number/boolean, nested tables).
-----------------------------------------------------------------------------
-local function val_str(v)
-  local tv = type(v)
-  if tv == 'string' then return string.format('%q', v) end
-  if tv == 'number' then
-    if v == math.floor(v) and math.abs(v) < 2 ^ 31 then return string.format('%d', v) end
-    return string.format('%.10g', v)
-  end
-  return tostring(v)   -- boolean
+local function read_file(file)
+  return load_table(mq.configDir .. '/' .. file)
 end
 
-local function key_str(k)
-  if type(k) == 'number' then return '[' .. string.format('%d', k) .. ']' end
-  if k:match('^[%a_][%w_]*$') then return k end
-  return '[' .. string.format('%q', k) .. ']'
-end
-
-local function serialize(t, ind, out)
-  out[#out + 1] = '{\n'
-  local pad = string.rep('  ', ind + 1)
-  local nums, strs = {}, {}
-  for k in pairs(t) do
-    if type(k) == 'number' then nums[#nums + 1] = k
-    elseif type(k) == 'string' then strs[#strs + 1] = k end
-  end
-  table.sort(nums); table.sort(strs)
-  local function emit(k)
-    local v = t[k]
-    out[#out + 1] = pad .. key_str(k) .. ' = '
-    if type(v) == 'table' then serialize(v, ind + 1, out)
-    else out[#out + 1] = val_str(v) end
-    out[#out + 1] = ',\n'
-  end
-  for _, k in ipairs(nums) do emit(k) end
-  for _, k in ipairs(strs) do emit(k) end
-  out[#out + 1] = string.rep('  ', ind) .. '}'
-end
-
-local function write_file(path, tbl)
-  ensure_dir()
-  local out = { '-- eqgfx settings (auto-generated; edit while scripts are stopped)\nreturn ' }
-  serialize(tbl, 0, out)
-  out[#out + 1] = '\n'
-  local f, e = io.open(path, 'w')
-  if not f then return false, e end
-  f:write(table.concat(out))
-  f:close()
-  return true
-end
-
--- Remove one section from a file; delete the file if it ends up empty.
-local function remove_section(path, section)
-  local whole = read_file(path)
-  if not whole or whole[section] == nil then return end
-  whole[section] = nil
-  if next(whole) == nil then os.remove(path)
-  else write_file(path, whole) end
-end
-
---- Fill any keys missing from a loaded config with defaults (so new fields
---- appear on upgrade). Recurses into nested tables; existing values win.
 ---@param dst table|nil # loaded (possibly partial) config
 ---@param def table # the defaults to backfill from
 ---@return table dst # the merged table (same identity as dst when it was a table)
@@ -156,7 +45,7 @@ local function merge_defaults(dst, def)
   for k, v in pairs(def) do
     if type(v) == 'table' then
       dst[k] = merge_defaults(dst[k], v)
-    elseif dst[k] == nil then
+    elseif type(dst[k]) ~= type(v) or dst[k] ~= dst[k] then
       dst[k] = v
     end
   end
@@ -164,110 +53,82 @@ local function merge_defaults(dst, def)
 end
 M.merge_defaults = merge_defaults
 
-----------------------------------------------------------------------------
--- Store instances (closure-based: callers use dot-call).
-----------------------------------------------------------------------------
-
 ---@class SettingsStore
 ---@field section string
 ---@field defaults table
 ---@field legacy string|nil
 ---@field data table          live settings (defaults until load() merges files)
----@field scope string        'char' | 'server' | 'global'
+---@field scope string        'char' | 'class' | 'global'
 ---@field load fun(): table
----@field save fun(log?: table): boolean
+---@field save fun()
 ---@field mark_dirty fun()
----@field maybe_save fun(log?: table)
+---@field maybe_save fun()
 ---@field set_scope fun(scope: string, log?: table)
 
---- Create a scoped settings store for your script. All features (and your
---- own scripts) share the same three files; each store owns one section.
----
---- ```lua
---- local Store = require('eqgfx.lib.settings')
---- local settings = Store.new{ section = 'myscript', defaults = { radius = 50 } }
---- settings.load()
---- settings.data.radius = 75
---- settings.mark_dirty()
---- settings.maybe_save()    -- call every loop pass; writes only when dirty
---- ```
 ---@param opts { section: string, defaults: table, legacy: string|nil } # legacy = old single-file config to import once
 ---@return SettingsStore store
 function M.new(opts)
   local self = {
     section  = assert(opts.section, 'settings store needs a section name'),
     defaults = assert(opts.defaults, 'settings store needs defaults'),
-    legacy   = opts.legacy,     -- optional old single-file config to import
+    legacy   = opts.legacy,
     scope    = 'char',
   }
-  -- defaults live immediately so .data is never nil; load() swaps in the
-  -- merged on-disk values
   self.data = merge_defaults({}, self.defaults)
-  local dirty = false
+  local dirty, changedAt = false, 0
 
-  --- Load the section: checks character -> server -> global files, merges
-  --- defaults over what it finds, and sets the store's scope to wherever the
-  --- section lived. Call once at script start.
   ---@return table data # the live settings table (also self.data)
   function self.load()
     local found, level
-    for _, sc in ipairs(M.SCOPES) do
-      local t = read_file(path_for(sc))
+    for _, scope in ipairs(M.SCOPES) do
+      local t = read_file(file_for(scope))
       if t and type(t[self.section]) == 'table' then
-        found, level = t[self.section], sc
+        found, level = t[self.section], scope
         break
       end
     end
     if not found and self.legacy then
-      found = read_file(self.legacy)        -- one-time import of the old file
+      found = load_table(self.legacy)
     end
     self.data  = merge_defaults(found or {}, self.defaults)
     self.scope = level or 'char'
     return self.data
   end
 
-  --- Write the section to the current scope's file immediately (read-modify-
-  --- write; other sections in the file are preserved). Prefer maybe_save().
-  ---@param log table|nil # lwlogger-style module for failure warnings
-  ---@return boolean ok
-  function self.save(log)
-    local target = path_for(self.scope)
-    local whole = read_file(target) or {}
+  function self.save()
+    local file = file_for(self.scope)
+    local whole = read_file(file) or {}
     whole[self.section] = self.data
-    local okk, e = write_file(target, whole)
-    if not okk and log then log.Warn('settings save failed (%s): %s', target, tostring(e)) end
-    return okk
+    mq.pickle(file, whole)
   end
 
-  --- Flag the settings as changed; the next maybe_save() writes them.
-  --- Call after every mutation of self.data (menu widgets do this).
-  function self.mark_dirty() dirty = true end
+  function self.mark_dirty()
+    dirty, changedAt = true, mq.gettime()
+  end
 
-  --- Save if dirty, else do nothing. Call every loop pass - no time
-  --- debounce needed since writes only happen when something changed.
-  ---@param log table|nil # lwlogger-style module for failure warnings
-  function self.maybe_save(log)
-    if dirty then
-      self.save(log)
+  function self.maybe_save()
+    if dirty and mq.gettime() - changedAt >= SAVE_QUIET_MS then
       dirty = false
+      self.save()
     end
   end
 
-  --- Change save scope ('char'/'server'/'global'). Removes this section from
-  --- files more specific than the new scope (so the new file actually takes
-  --- effect) and saves immediately.
-  ---@param scope string # 'char' | 'server' | 'global'
+  ---@param scope string # 'char' | 'class' | 'global'
   ---@param log table|nil # lwlogger-style module
   function self.set_scope(scope, log)
     if scope == self.scope then return end
     self.scope = scope
     for _, sc in ipairs(M.SCOPES) do
       if sc == scope then break end
-      remove_section(path_for(sc), self.section)
+      local whole = read_file(file_for(sc))
+      if whole and whole[self.section] ~= nil then
+        whole[self.section] = nil
+        mq.pickle(file_for(sc), whole)
+      end
     end
-    self.save(log)
+    self.save()
     dirty = false
-    if log then log.Info('settings scope -> %s (%s)', scope, path_for(scope)) end
+    if log then log.Info('settings scope -> %s (%s)', scope, file_for(scope)) end
   end
 
   return self

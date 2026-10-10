@@ -1,11 +1,3 @@
---[[
-  indicators/render.lua - world-space AE geometry drawing.
-
-  Projection via eqgfx.project (raw pixels + activeCast reliable in-front-of-camera
-  bool per vertex); drawing via the ImGui foreground draw list - translucent
-  filled polygons, anti-aliased outlines, caster->target lines.
-]]
-
 local mq       = require('mq')
 local eqgfx    = require('eqgfx')
 local ImGui    = require('ImGui')
@@ -19,13 +11,11 @@ local SEGMENTS        = 48
 
 local R = {}
 
---- Settings color ({r,g,b,a} floats) -> ImGui packed u32.
 ---@param c number[] # {r,g,b,a} floats 0..1
 ---@return integer u32
 local function u32(c) return ImGui.ColorConvertFloat4ToU32({ c[1], c[2], c[3], c[4] }) end
 R.u32 = u32
 
---- Fill + outline colors for a caster category.
 ---@param cat string # 'self' | 'friend' | 'enemy'
 ---@return integer fill # packed fill color
 ---@return integer line # packed outline color
@@ -36,20 +26,10 @@ local function cols_for(cat)
   else                        return u32(C.enemyFill),  u32(C.enemyLine) end
 end
 
---- EQ heading (deg, 0=N, clockwise) -> world atan2 angle. Keep in lockstep
---- with nameplates/ae.lua facing_rad().
 ---@param h number|nil # Spawn.Heading.Degrees()
 ---@return number rad
 local function facing_rad(h) return math.rad(90 + (h or 0)) end
 
---- Fan-fill a perimeter of WORLD points around a WORLD center, then outline
---- it. Each filled wedge (center, p_i, p_{i+1}) is drawn only when all three
---- vertices are in front of the camera, so a ring you stand inside degrades
---- gracefully instead of exploding across the screen.
----
---- ```lua
---- fill_and_outline(drawList, x, y, z, circle_pts(x, y, z, 30, 48), true, fill, line)
---- ```
 ---@param drawList ImDrawList
 ---@param cx number # world center (TLO order)
 ---@param cy number
@@ -93,7 +73,6 @@ local function fill_and_outline(drawList, cx, cy, cz, pts, closed, fillCol, line
 end
 R.fill_and_outline = fill_and_outline
 
---- N world points on a circle (clockwise) at ground z.
 ---@param cx number # circle center (TLO order)
 ---@param cy number
 ---@param cz number # ground height
@@ -110,8 +89,6 @@ local function circle_pts(cx, cy, cz, radius, n)
 end
 R.circle_pts = circle_pts
 
---- Arc wedge perimeter from a0..a1 (the center vertex is supplied by
---- fill_and_outline, making the wedge).
 ---@param cx number # arc center (TLO order)
 ---@param cy number
 ---@param cz number
@@ -131,7 +108,6 @@ local function arc_pts(cx, cy, cz, radius, a0, a1, n)
   return pts
 end
 
---- Filled quad (beam) from four world corners in order, with outline.
 ---@param drawList ImDrawList
 ---@param activeCast { x: number, y: number, z: number } # corner A
 ---@param b { x: number, y: number, z: number } # corner B
@@ -152,8 +128,6 @@ local function fill_quad(drawList, activeCast, b, c, d, fillCol, lineCol)
   end
 end
 
---- A spawn's position with the configured ground offset applied (areas sit
---- on the ground, not at chest height).
 ---@param spawn spawn # live spawn TLO
 ---@return number x
 ---@return number y
@@ -162,9 +136,6 @@ local function spawn_ground(spawn)
   return spawn.X(), spawn.Y(), spawn.Z() - (settings.data or {}).groundOffset
 end
 
---- Draw one active cast's area: ring (caster- or target-centered), cone
---- wedge, beam quad, or a caster->target line for single-target spells -
---- per the spell's geometry and the category/shape toggles.
 ---@param drawList ImDrawList # background draw list (clipped by the caller)
 ---@param activeCast ActiveCast # one entry from the feature's active set
 function R.draw_active(drawList, activeCast)
@@ -201,7 +172,6 @@ function R.draw_active(drawList, activeCast)
       local a0, a1 = facing + math.rad(spellGeom.coneStart), facing + math.rad(spellGeom.coneEnd)
       fill_and_outline(drawList, cx, cy, cz, arc_pts(cx, cy, cz, radius, a0, a1, SEGMENTS), false, fillCol, lineCol)
     end
-
   elseif tt == TT.Beam then
     if not cfg.showBeams then return end
     local f   = facing_rad(spawn.Heading.Degrees())
@@ -211,11 +181,9 @@ function R.draw_active(drawList, activeCast)
     local px, py = -fy, fx
     local function corner(d, w) return { x = cx + fx*d + px*w, y = cy + fy*d + py*w, z = cz } end
     fill_quad(drawList, corner(0, hw), corner(len, hw), corner(len, -hw), corner(0, -hw), fillCol, lineCol)
-
   elseif CASTER_CENTERED[tt] then
     if not cfg.showAoE then return end
     fill_and_outline(drawList, cx, cy, cz, circle_pts(cx, cy, cz, radius, SEGMENTS), true, fillCol, lineCol)
-
   elseif TARGET_CENTERED[tt] then
     if not cfg.showTargetAoE then return end
     local tsp = (activeCast.targetID and mq.TLO.Spawn(activeCast.targetID)
@@ -224,9 +192,7 @@ function R.draw_active(drawList, activeCast)
       local tx, ty, tz = spawn_ground(tsp)
       fill_and_outline(drawList, tx, ty, tz, circle_pts(tx, ty, tz, radius, SEGMENTS), true, fillCol, lineCol)
     end
-
   else
-    -- single target / direct: line from caster to target.
     if not cfg.showLines then return end
     local tsp = (activeCast.targetID and mq.TLO.Spawn(activeCast.targetID)
                  or (activeCast.isSelf and mq.TLO.Target or nil)) --[[@as spawn|nil]]
@@ -239,8 +205,6 @@ function R.draw_active(drawList, activeCast)
   end
 end
 
---- Cyan reference ring around the player (toggled from the menu / /aering) -
---- a fixed-radius calibration aid.
 ---@param drawList ImDrawList
 function R.draw_debug_ring(drawList)
   local cfg = settings.data or {}

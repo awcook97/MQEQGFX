@@ -1,17 +1,9 @@
---[[
-  dmgnums/menu.lua - the in-game customization window (/dnmenu).
-
-  Every widget writes straight into settings.data and marks it dirty; the main
-  loop debounce-saves through the shared scoped store.
-]]
-
 local ImGui = require("ImGui")
 local types = require("eqgfx.dmgnums._types")
 local settings = require("eqgfx.dmgnums.settings")
 
 local M = { open = false }
 
---- Show/hide the settings window (the /dnmenu bind).
 function M.toggle()
 	M.open = not M.open
 end
@@ -20,7 +12,6 @@ local function mark()
 	settings.mark_dirty()
 end
 
---- Checkbox bound to t[k]; marks the settings dirty on change.
 local function check(label, t, k)
 	local v, pressed = ImGui.Checkbox(label, t[k])
 	if pressed then
@@ -29,7 +20,6 @@ local function check(label, t, k)
 	end
 end
 
---- Integer slider bound to t[k]; marks dirty on change.
 local function slideri(label, t, k, lo, hi)
 	local v, changed = ImGui.SliderInt(label, t[k], lo, hi)
 	if changed then
@@ -38,7 +28,6 @@ local function slideri(label, t, k, lo, hi)
 	end
 end
 
---- Float slider bound to t[k]; marks dirty on change.
 local function sliderf(label, t, k, lo, hi, fmt)
 	local v, changed = ImGui.SliderFloat(label, t[k], lo, hi, fmt or "%.1f")
 	if changed then
@@ -47,8 +36,6 @@ local function sliderf(label, t, k, lo, hi, fmt)
 	end
 end
 
---- Keep colors as plain number tables (pickle-safe) regardless of what the
---- binding hands back (table vs ImVec4).
 local function to_color(colorVal)
 	if type(colorVal) == "table" then
 		return { colorVal[1], colorVal[2], colorVal[3], colorVal[4] }
@@ -56,7 +43,6 @@ local function to_color(colorVal)
 	return { colorVal.x, colorVal.y, colorVal.z, colorVal.w }
 end
 
---- Color picker bound to t[k] ({r,g,b,a} floats); marks dirty on change.
 local function color(label, t, k)
 	local colorVal, changed = ImGui.ColorEdit4(label, t[k])
 	if changed then
@@ -65,7 +51,6 @@ local function color(label, t, k)
 	end
 end
 
---- Combo box bound to t[k] (1-based index into items); marks dirty on change.
 local function combo(label, t, k, items)
 	local v, changed = ImGui.Combo(label, t[k], items, #items)
 	if changed then
@@ -74,7 +59,6 @@ local function combo(label, t, k, items)
 	end
 end
 
--- The WHO x WHAT filter grid: one row per source, one checkbox per kind.
 local GRID_SOURCES = {
 	{ key = 'mine',     label = 'Mine' },
 	{ key = 'pet',      label = 'My pet' },
@@ -89,8 +73,6 @@ local GRID_KINDS = {
 	{ key = 'misses', label = 'Misses' },
 }
 
---- Render the settings window (call every frame from the ImGui callback;
---- no-op while closed).
 function M.draw()
 	if not M.open then
 		return
@@ -105,8 +87,8 @@ function M.draw()
 			settings.set_scope("char")
 		end
 		ImGui.SameLine()
-		if ImGui.RadioButton("This server", settings.scope == "server") then
-			settings.set_scope("server")
+		if ImGui.RadioButton("This class", settings.scope == "class") then
+			settings.set_scope("class")
 		end
 		ImGui.SameLine()
 		if ImGui.RadioButton("All characters", settings.scope == "global") then

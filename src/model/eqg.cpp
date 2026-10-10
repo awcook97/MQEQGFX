@@ -19,8 +19,6 @@ static std::string strAt(const uint8_t* pool, uint32_t poolSize, uint32_t off)
 	return std::string(s, len);
 }
 
-// Walk the material palette (identical record layout in EQGS and EQGM),
-// capturing names + diffuse texture. Advances 'p' past the palette.
 static bool ParseMaterials(const uint8_t* data, size_t size, const uint8_t* pool, uint32_t poolSize,
 	uint32_t count, size_t& p, std::vector<Material>& out)
 {
@@ -40,7 +38,7 @@ static bool ParseMaterials(const uint8_t* data, size_t size, const uint8_t* pool
 			uint32_t pnameOff = rd32(data + pp);
 			uint32_t ptype    = rd32(data + pp + 4);
 			uint32_t pval     = rd32(data + pp + 8);
-			if (ptype == 2)   // string value = texture filename
+			if (ptype == 2)
 			{
 				std::string pname = strAt(pool, poolSize, pnameOff);
 				if (pname == "e_TextureDiffuse0")
@@ -89,7 +87,6 @@ bool ParseModel(const uint8_t* data, size_t size, Model& out, std::string& err)
 
 		if (!ParseMaterials(data, size, pool, poolSize, numMat, p, out.materials)) { err = "bad material list"; return false; }
 
-		// Skip the bone list (bind-pose mesh needs no skinning).
 		if (p + static_cast<size_t>(numBone) * 0x38 > size) { err = "bad bone list"; return false; }
 		p += static_cast<size_t>(numBone) * 0x38;
 
@@ -128,7 +125,6 @@ bool ParseModel(const uint8_t* data, size_t size, Model& out, std::string& err)
 				int mat = static_cast<int>(rd32(q + 12));
 				if (i0 >= vc || i1 >= vc || i2 >= vc)
 					continue;
-				// Engine reverses winding to (v0, v2, v1).
 				out.indices.push_back(base + i0);
 				out.indices.push_back(base + i2);
 				out.indices.push_back(base + i1);
@@ -142,16 +138,13 @@ bool ParseModel(const uint8_t* data, size_t size, Model& out, std::string& err)
 		return true;
 	}
 
-	// EQGM (.mod) - static single mesh (equipment / newer race bodies).
-	// Header (0x1C): magic, version@4, poolSize@8, numMat@0xC, numVert@0x10,
-	// numTri@0x14, numBone@0x18. version>2 vertex is 0x2C (validated vs dkf.mod).
 	if (size < 0x1C) { err = "truncated EQGM header"; return false; }
 	uint32_t version  = rd32(data + 4);
 	uint32_t poolSize = rd32(data + 8);
 	uint32_t numMat   = rd32(data + 12);
-	uint32_t numVert  = rd32(data + 16);   // 0x10
-	uint32_t numTri   = rd32(data + 20);   // 0x14
-	out.boneCount = static_cast<int>(rd32(data + 24));   // 0x18
+	uint32_t numVert  = rd32(data + 16);
+	uint32_t numTri   = rd32(data + 20);
+	out.boneCount = static_cast<int>(rd32(data + 24));
 	if (0x1C + static_cast<size_t>(poolSize) > size) { err = "bad string pool"; return false; }
 	const uint8_t* pool = data + 0x1C;
 	size_t p = 0x1C + poolSize;
@@ -167,7 +160,7 @@ bool ParseModel(const uint8_t* data, size_t size, Model& out, std::string& err)
 		Vertex vx;
 		vx.px = rdf(q);      vx.py = rdf(q + 4);  vx.pz = rdf(q + 8);
 		vx.nx = rdf(q + 12); vx.ny = rdf(q + 16); vx.nz = rdf(q + 20);
-		size_t uvOff = (version > 2) ? 0x1C : 0x18;   // v3 has a u32 color at 0x18
+		size_t uvOff = (version > 2) ? 0x1C : 0x18;
 		vx.u = rdf(q + uvOff); vx.v = rdf(q + uvOff + 4);
 		out.vertices.push_back(vx);
 		AddVertexBounds(out, vx);

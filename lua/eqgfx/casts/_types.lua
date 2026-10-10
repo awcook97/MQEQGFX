@@ -1,7 +1,3 @@
---[[
-  casts/_types.lua - types, classes and constants for cast tracking.
-]]
-
 ---@class CastInfo
 ---@field spawnID integer
 ---@field casterName string
@@ -20,7 +16,6 @@
 
 local T = {}
 
--- EQ animation ids that indicate "this spawn is casting" (reliable <= ~400u).
 T.CAST_ANIMS = { [27]=true, [43]=true, [44]=true, [134]=true, [135]=true }
 
 ---@param spawnID integer

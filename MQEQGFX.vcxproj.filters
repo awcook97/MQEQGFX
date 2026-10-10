@@ -1,0 +1,367 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <Extensions>cpp;c;cxx;def;odl;idl;hpj;bat;asm</Extensions>
+    </Filter>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{F41EC919-5F72-5687-95EA-C09491CB8DA1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\fixes">
+      <UniqueIdentifier>{FA82008E-7974-5AF3-85BE-4AC0D950DDFA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\fixes\debugging">
+      <UniqueIdentifier>{C7689A84-9518-5E34-9172-A786BB99B8ED}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\gpu">
+      <UniqueIdentifier>{7AAB20E2-D00C-5B3B-B1C4-886F75F11527}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\gpu\effects">
+      <UniqueIdentifier>{9FC5C1E5-2BBD-54FC-A1C6-6066C699F330}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\model">
+      <UniqueIdentifier>{71A86C18-B52C-5431-9EFB-888C98CC2E75}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\ui">
+      <UniqueIdentifier>{C9B29BA7-4611-5707-B050-5ABD7BF21D2B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\ui\skins">
+      <UniqueIdentifier>{17508A52-AC82-5C5E-BA46-429464411F39}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\unitframes">
+      <UniqueIdentifier>{47E1B949-FC80-5AD1-B463-44ACB1B14C5B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <Extensions>h;hpp;hxx;hm;inl;inc</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\CombatNumbers.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DebugWindow.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fixes\AnimationLod.cpp">
+      <Filter>Source Files\src\fixes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fixes\debugging\ActorAnimationStats.cpp">
+      <Filter>Source Files\src\fixes\debugging</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fixes\debugging\ParticleGpuStats.cpp">
+      <Filter>Source Files\src\fixes\debugging</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fixes\NametagBatch.cpp">
+      <Filter>Source Files\src\fixes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fixes\ParticleGpu.cpp">
+      <Filter>Source Files\src\fixes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\GfxSettings.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\AttackFx.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFx.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxBard.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxBeastlord.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxBerserker.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxCleric.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxDruid.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxEnchanter.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxGeneral.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxLines.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxMage.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxMonk.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxNecromancer.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxPaladin.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxRanger.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxRogue.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxShadowKnight.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxShaman.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxWarrior.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\effects\SpellFxWizard.cpp">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\FxCamera.cpp">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\FxCatalog.cpp">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\Glyphs.cpp">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gpu\LineFX.cpp">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Highlight.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\model\dds.cpp">
+      <Filter>Source Files\src\model</Filter>
+    </ClCompile>
+    <ClCompile Include="src\model\eqg.cpp">
+      <Filter>Source Files\src\model</Filter>
+    </ClCompile>
+    <ClCompile Include="src\model\pfs.cpp">
+      <Filter>Source Files\src\model</Filter>
+    </ClCompile>
+    <ClCompile Include="src\model\render.cpp">
+      <Filter>Source Files\src\model</Filter>
+    </ClCompile>
+    <ClCompile Include="src\model\wld.cpp">
+      <Filter>Source Files\src\model</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Models.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\MQEQGFX.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SettingsFile.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Spells.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TargetRing.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Actions.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Canvas.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ChatLog.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ClassProfile.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Controls.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\HotButtons.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Layouts.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Skins.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Actions.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Chat.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Collections.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Gems.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Hotbars.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\Inventory.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\skins\SpellBookWnd.cpp">
+      <Filter>Source Files\src\ui\skins</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SpellBook.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Suppress.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\UiSettings.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Widgets.cpp">
+      <Filter>Source Files\src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\FocusWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\Frame.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\GroupWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\Options.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\PetWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\PlayerWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\PluginOptions.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\RaidWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\Settings.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\TargetWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\UnitWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\unitframes\XTargetWindow.cpp">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Units.cpp">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Detours.h">
+      <Filter>Source Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gpu\effects\SpellFxLooks.h">
+      <Filter>Source Files\src\gpu\effects</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gpu\FxCamera.h">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gpu\FxCatalog.h">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gpu\Glyphs.h">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gpu\LineFX.h">
+      <Filter>Source Files\src\gpu</Filter>
+    </ClInclude>
+    <ClInclude Include="src\model\dds.h">
+      <Filter>Source Files\src\model</Filter>
+    </ClInclude>
+    <ClInclude Include="src\model\eqg.h">
+      <Filter>Source Files\src\model</Filter>
+    </ClInclude>
+    <ClInclude Include="src\model\pfs.h">
+      <Filter>Source Files\src\model</Filter>
+    </ClInclude>
+    <ClInclude Include="src\model\render.h">
+      <Filter>Source Files\src\model</Filter>
+    </ClInclude>
+    <ClInclude Include="src\model\wld.h">
+      <Filter>Source Files\src\model</Filter>
+    </ClInclude>
+    <ClInclude Include="src\MQEQGFX.h">
+      <Filter>Source Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\PatternScan.h">
+      <Filter>Source Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\SettingsFile.h">
+      <Filter>Source Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Signatures.h">
+      <Filter>Source Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Actions.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ChatLog.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ClassProfile.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Controls.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\HotButtons.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Layouts.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\NativeUi.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Skins.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SpellBook.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Suppress.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Widgets.h">
+      <Filter>Source Files\src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\unitframes\UnitFrames.h">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClInclude>
+    <ClInclude Include="src\unitframes\UnitWindow.h">
+      <Filter>Source Files\src\unitframes</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="MQEQGFX.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="LuaPlugin.props" />
+    <None Include="vcpkg_mq.txt" />
+  </ItemGroup>
+</Project>

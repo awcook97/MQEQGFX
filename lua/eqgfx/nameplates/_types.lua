@@ -1,7 +1,3 @@
---[[
-  nameplates/_types.lua - types, classes and enums for the nameplate feature.
-]]
-
 local T = {}
 
 ---@enum NamePosition
@@ -73,12 +69,6 @@ T.ResScopeLabels = { 'Off', 'Self only', 'Self + group', 'All PCs', 'Everything'
 T.PlateOverlapMode = { OFF = 1, SEPARATE = 2, STACK = 3 }
 T.PlateOverlapModeLabels = { 'Off (plates overlap)', 'Separate (push apart)',
                              'Stack (one column per cluster)' }
-
-----------------------------------------------------------------------------
--- Configuration classes. nameplates/settings.lua's DEFAULTS literal is
--- checked against these (---@type NameplatesConfig), so the class and the
--- defaults can't drift apart silently.
-----------------------------------------------------------------------------
 
 ---@class NpShowCfg          which spawn types get plates
 ---@field npcs boolean
@@ -293,8 +283,7 @@ T.PlateOverlapModeLabels = { 'Off (plates overlap)', 'Separate (push apart)',
 ---@field plate Plate
 ---@field castInfo CastInfo|nil # cast bar to draw beneath it
 ---@field isTarget boolean # this plate is my current target
----@field hits number[][]|nil # EQ window rects it overlaps (CLIP mode)
----@field bbox number[]|nil # its padded bbox {x0,y0,x1,y1} (CLIP mode)
+---@field pieces number[][]|nil # visible pieces of its padded bbox (CLIP mode)
 
 ---@class PlateGeom          per-side layout cursors while drawing one plate
 ---@field x0 number # bar rect left
@@ -310,6 +299,7 @@ T.PlateOverlapModeLabels = { 'Off (plates overlap)', 'Separate (push apart)',
 
 ---@class Plate
 ---@field id integer
+---@field buffDue number|nil  next buff scan, casts.now() seconds
 ---@field name string
 ---@field dispHp number       smoothed HP fraction 0..1 (what the bar shows)
 ---@field lastHp number       last raw HP fraction (damage-flash detection)

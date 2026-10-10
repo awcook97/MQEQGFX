@@ -1,16 +1,6 @@
-/*
- * gpu/FxCatalog.cpp - the effect tables.
- *
- * Read this as a design document as much as data. Each class's list starts with
- * its signature - the silhouette you should recognise across a zone - followed
- * by the abilities that class is actually known for. Plate classes get heavy,
- * grounded, slow figures; casters get orbiting geometry; priests get rising
- * light; rogues and monks get small fast motion. Elements only appear on the
- * classes that HAVE them, which is why the counts differ: a Magician gets four
- * pet elements, a Warrior gets none and gets stances instead.
- */
-
 #include "FxCatalog.h"
+
+#include "eqlib/game/Constants.h"
 
 #include <cstring>
 
@@ -20,27 +10,23 @@ namespace {
 
 constexpr float PI = 3.14159265358979323846f;
 
-// Signature colours: WoW class palette mapped to the closest EQ class, same as
-// the Lua version used, so the two paths agree while both exist.
-// (values are linear 0..1)
-#define C_WAR 0.776f, 0.608f, 0.427f     // Warrior
-#define C_CLR 1.000f, 1.000f, 1.000f     // Priest
-#define C_PAL 0.957f, 0.549f, 0.729f     // Paladin
-#define C_RNG 0.667f, 0.827f, 0.447f     // Hunter
-#define C_SHD 0.769f, 0.118f, 0.227f     // Death Knight
-#define C_DRU 1.000f, 0.486f, 0.039f     // Druid
-#define C_MNK 0.000f, 1.000f, 0.596f     // Monk
-#define C_BRD 0.902f, 0.800f, 0.502f     // heirloom gold
-#define C_ROG 1.000f, 0.957f, 0.408f     // Rogue
-#define C_SHM 0.000f, 0.439f, 0.867f     // Shaman
-#define C_NEC 0.529f, 0.533f, 0.933f     // Warlock
-#define C_WIZ 0.247f, 0.780f, 0.922f     // Mage
-#define C_MAG 0.200f, 0.576f, 0.498f     // Evoker
-#define C_ENC 0.639f, 0.188f, 0.788f     // Demon Hunter
-#define C_BST 0.118f, 1.000f, 0.000f     // uncommon green
-#define C_BER 0.639f, 0.208f, 0.933f     // epic purple
+#define C_WAR 0.776f, 0.608f, 0.427f
+#define C_CLR 1.000f, 1.000f, 1.000f
+#define C_PAL 0.957f, 0.549f, 0.729f
+#define C_RNG 0.667f, 0.827f, 0.447f
+#define C_SHD 0.769f, 0.118f, 0.227f
+#define C_DRU 1.000f, 0.486f, 0.039f
+#define C_MNK 0.000f, 1.000f, 0.596f
+#define C_BRD 0.902f, 0.800f, 0.502f
+#define C_ROG 1.000f, 0.957f, 0.408f
+#define C_SHM 0.000f, 0.439f, 0.867f
+#define C_NEC 0.529f, 0.533f, 0.933f
+#define C_WIZ 0.247f, 0.780f, 0.922f
+#define C_MAG 0.200f, 0.576f, 0.498f
+#define C_ENC 0.639f, 0.188f, 0.788f
+#define C_BST 0.118f, 1.000f, 0.000f
+#define C_BER 0.639f, 0.208f, 0.933f
 
-// Element colours, shared across every class that actually casts them.
 #define E_FIRE  1.000f, 0.420f, 0.110f
 #define E_COLD  0.400f, 0.800f, 1.000f
 #define E_MAGIC 0.600f, 0.400f, 1.000f
@@ -52,9 +38,6 @@ constexpr float PI = 3.14159265358979323846f;
 #define E_WATER 0.250f, 0.550f, 0.900f
 #define E_DIVINE 1.000f, 0.930f, 0.650f
 #define E_NATURE 0.400f, 0.900f, 0.400f
-
-// ---------------------------------------------------------------------------
-// PLATE / MELEE - no elements. Grounded, heavy, disciplines and stances.
 
 const FxDef kWAR[] = {
 	{ "Shield Wall", FxForm_Ring, 4.5f, 2.4f, 0.55f, 0.0f, 0.06f, 40, FxFlag_Comet, 0, 0.55f, 1.00f, 0.20f, { C_WAR, 0.85f } },
@@ -83,10 +66,6 @@ const FxDef kBER[] = {
 	{ "Axe Throw", FxForm_Polygon, 3.2f, 2.6f, 2.60f, 0.0f, 0.05f, 24, 0, 3, 2.60f, 0, 0, { C_BER, 0.80f } },
 	{ "Battle Cry", FxForm_Bloom, 3.2f, 2.2f, 1.40f, 0.0f, 0.06f, 48, 0, 3, 0, 0, 0, { 0.95f, 0.45f, 0.35f, 0.70f } },
 };
-
-// ---------------------------------------------------------------------------
-// HYBRIDS - a little of everything, so they mix a melee silhouette with one or
-// two real spell lines.
 
 const FxDef kPAL[] = {
 	{ "Halo", FxForm_Ring, 2.6f, 6.2f, 0.30f, 0.0f, 0.05f, 40, FxFlag_Comet, 0, 0.28f, 1.00f, 0.22f, { C_PAL, 0.95f } },
@@ -120,9 +99,6 @@ const FxDef kBST[] = {
 	{ "Spirit Bond", FxForm_Bloom, 3.0f, 4.4f, 0.70f, 0.0f, 0.05f, 40, 0, 2, 0, 0, 0, { E_NATURE, 0.70f } },
 };
 
-// ---------------------------------------------------------------------------
-// PRIESTS - rising light, heals, and each one's own damage school.
-
 const FxDef kCLR[] = {
 	{ "Divine Light", FxForm_Bloom, 2.8f, 6.0f, 0.60f, 0.0f, 0.055f, 48, FxFlag_Additive, 2, 0, 0, 0, { C_CLR, 0.85f } },
 	{ "Heal", FxForm_Bloom, 3.2f, 5.6f, 0.90f, 0.0f, 0.05f, 44, FxFlag_Additive, 2, 0, 0, 0, { E_NATURE, 0.80f } },
@@ -148,9 +124,6 @@ const FxDef kSHM[] = {
 	{ "Slow", FxForm_Ring, 3.8f, 0.5f, 0.30f, 0.0f, 0.055f, 44, 0, 0, 0.30f, 1.20f, 0, { C_SHM, 0.65f } },
 	{ "Canni", FxForm_Bloom, 2.6f, 4.6f, 1.10f, 0.0f, 0.05f, 40, FxFlag_Reverse, 2, 0, 0, 0, { C_SHM, 0.70f } },
 };
-
-// ---------------------------------------------------------------------------
-// CASTERS - orbiting arcane geometry, one look per school they actually cast.
 
 const FxDef kWIZ[] = {
 	{ "Arcane", FxForm_Ring, 3.4f, 3.0f, 1.30f, 0.0f, 0.05f, 44, FxFlag_Comet, 0, 1.30f, 1.00f, 0.40f, { C_WIZ, 0.90f } },
@@ -187,9 +160,6 @@ const FxDef kENC[] = {
 	{ "Tash", FxForm_Spire, 2.8f, 2.2f, 1.50f, 0.0f, 0.055f, 28, 0, 4, 1.50f, 1.60f, 0, { E_MAGIC, 0.80f } },
 };
 
-// ---------------------------------------------------------------------------
-// BARD - song families rather than elements.
-
 const FxDef kBRD[] = {
 	{ "Song", FxForm_Bloom, 3.0f, 2.4f, 0.90f, 0.0f, 0.05f, 48, 0, 3, 0, 0, 0, { C_BRD, 0.85f } },
 	{ "Selo's", FxForm_Helix, 2.4f, 4.8f, 1.50f, 0.0f, 0.045f, 64, FxFlag_Comet, 2, -2.0f, 0, 0.50f, { C_BRD, 0.80f } },
@@ -204,23 +174,23 @@ const FxDef kMER[] = {
 };
 
 const ClassFx kClasses[] = {
-	{ "WAR", "Warrior",       kWAR, (int)(sizeof(kWAR) / sizeof(kWAR[0])) },
-	{ "CLR", "Cleric",        kCLR, (int)(sizeof(kCLR) / sizeof(kCLR[0])) },
-	{ "PAL", "Paladin",       kPAL, (int)(sizeof(kPAL) / sizeof(kPAL[0])) },
-	{ "RNG", "Ranger",        kRNG, (int)(sizeof(kRNG) / sizeof(kRNG[0])) },
-	{ "SHD", "Shadow Knight", kSHD, (int)(sizeof(kSHD) / sizeof(kSHD[0])) },
-	{ "DRU", "Druid",         kDRU, (int)(sizeof(kDRU) / sizeof(kDRU[0])) },
-	{ "MNK", "Monk",          kMNK, (int)(sizeof(kMNK) / sizeof(kMNK[0])) },
-	{ "BRD", "Bard",          kBRD, (int)(sizeof(kBRD) / sizeof(kBRD[0])) },
-	{ "ROG", "Rogue",         kROG, (int)(sizeof(kROG) / sizeof(kROG[0])) },
-	{ "SHM", "Shaman",        kSHM, (int)(sizeof(kSHM) / sizeof(kSHM[0])) },
-	{ "NEC", "Necromancer",   kNEC, (int)(sizeof(kNEC) / sizeof(kNEC[0])) },
-	{ "WIZ", "Wizard",        kWIZ, (int)(sizeof(kWIZ) / sizeof(kWIZ[0])) },
-	{ "MAG", "Magician",      kMAG, (int)(sizeof(kMAG) / sizeof(kMAG[0])) },
-	{ "ENC", "Enchanter",     kENC, (int)(sizeof(kENC) / sizeof(kENC[0])) },
-	{ "BST", "Beastlord",     kBST, (int)(sizeof(kBST) / sizeof(kBST[0])) },
-	{ "BER", "Berserker",     kBER, (int)(sizeof(kBER) / sizeof(kBER[0])) },
-	{ "MER", "Mercenary",     kMER, (int)(sizeof(kMER) / sizeof(kMER[0])) },
+	{ "WAR", "Warrior",       kWAR, (int)(sizeof(kWAR) / sizeof(kWAR[0])), eqlib::Warrior },
+	{ "CLR", "Cleric",        kCLR, (int)(sizeof(kCLR) / sizeof(kCLR[0])), eqlib::Cleric },
+	{ "PAL", "Paladin",       kPAL, (int)(sizeof(kPAL) / sizeof(kPAL[0])), eqlib::Paladin },
+	{ "RNG", "Ranger",        kRNG, (int)(sizeof(kRNG) / sizeof(kRNG[0])), eqlib::Ranger },
+	{ "SHD", "Shadow Knight", kSHD, (int)(sizeof(kSHD) / sizeof(kSHD[0])), eqlib::Shadowknight },
+	{ "DRU", "Druid",         kDRU, (int)(sizeof(kDRU) / sizeof(kDRU[0])), eqlib::Druid },
+	{ "MNK", "Monk",          kMNK, (int)(sizeof(kMNK) / sizeof(kMNK[0])), eqlib::Monk },
+	{ "BRD", "Bard",          kBRD, (int)(sizeof(kBRD) / sizeof(kBRD[0])), eqlib::Bard },
+	{ "ROG", "Rogue",         kROG, (int)(sizeof(kROG) / sizeof(kROG[0])), eqlib::Rogue },
+	{ "SHM", "Shaman",        kSHM, (int)(sizeof(kSHM) / sizeof(kSHM[0])), eqlib::Shaman },
+	{ "NEC", "Necromancer",   kNEC, (int)(sizeof(kNEC) / sizeof(kNEC[0])), eqlib::Necromancer },
+	{ "WIZ", "Wizard",        kWIZ, (int)(sizeof(kWIZ) / sizeof(kWIZ[0])), eqlib::Wizard },
+	{ "MAG", "Magician",      kMAG, (int)(sizeof(kMAG) / sizeof(kMAG[0])), eqlib::Mage },
+	{ "ENC", "Enchanter",     kENC, (int)(sizeof(kENC) / sizeof(kENC[0])), eqlib::Enchanter },
+	{ "BST", "Beastlord",     kBST, (int)(sizeof(kBST) / sizeof(kBST[0])), eqlib::Beastlord },
+	{ "BER", "Berserker",     kBER, (int)(sizeof(kBER) / sizeof(kBER[0])), eqlib::Berserker },
+	{ "MER", "Mercenary",     kMER, (int)(sizeof(kMER) / sizeof(kMER[0])), eqlib::Mercenary },
 };
 
 } // namespace
@@ -232,6 +202,16 @@ const ClassFx* FindClassFx(const char* shortName)
 	for (const ClassFx& c : kClasses)
 	{
 		if (std::strncmp(c.shortName, shortName, 4) == 0)
+			return &c;
+	}
+	return nullptr;
+}
+
+const ClassFx* FindClassFxById(int classId)
+{
+	for (const ClassFx& c : kClasses)
+	{
+		if (c.classId == classId)
 			return &c;
 	}
 	return nullptr;

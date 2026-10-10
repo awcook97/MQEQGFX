@@ -1,14 +1,3 @@
---[[
-  highlight/menu.lua - the in-game customization window (/hlmenu).
-
-  Every widget writes straight into settings.data and marks it dirty; the main
-  loop debounce-saves through the shared scoped store.
-
-  The Status section is deliberately at the top: the markers only draw on
-  spawns holding a group/raid role, and "no role assigned" looks exactly like
-  "broken" from the outside. This shows you which it is.
-]]
-
 local ImGui = require('ImGui')
 
 local max = math.max
@@ -19,8 +8,6 @@ local classanim = require('eqgfx.highlight.classanim')
 
 local M = { open = false }
 
---- Live status handed in by init.lua each frame, so the menu can report what
---- the role lookups actually resolved to without repeating them.
 ---@class HighlightStatus
 ---@field tankID integer|nil
 ---@field tankName string|nil
@@ -36,7 +23,6 @@ local M = { open = false }
 ---@field castFeed boolean|nil  # true when the plugin cast feed is live
 M.status = { litCount = 0, lineCount = 0, budget = 0, ambientCount = 0, castCount = 0 }
 
---- Show/hide the settings window (the /hlmenu bind).
 function M.toggle()
 	M.open = not M.open
 end
@@ -45,7 +31,6 @@ local function mark()
 	settings.mark_dirty()
 end
 
---- Checkbox bound to t[k]; marks the settings dirty on change.
 local function check(label, t, k)
 	local v, pressed = ImGui.Checkbox(label, t[k])
 	if pressed then
@@ -54,7 +39,6 @@ local function check(label, t, k)
 	end
 end
 
---- Integer slider bound to t[k]; marks dirty on change.
 local function slideri(label, t, k, lo, hi)
 	local v, changed = ImGui.SliderInt(label, t[k], lo, hi)
 	if changed then
@@ -63,7 +47,6 @@ local function slideri(label, t, k, lo, hi)
 	end
 end
 
---- Float slider bound to t[k]; marks dirty on change.
 local function sliderf(label, t, k, lo, hi, fmt)
 	local v, changed = ImGui.SliderFloat(label, t[k], lo, hi, fmt or '%.1f')
 	if changed then
@@ -72,8 +55,6 @@ local function sliderf(label, t, k, lo, hi, fmt)
 	end
 end
 
---- Keep colors as plain number tables (pickle-safe) regardless of what the
---- binding hands back (table vs ImVec4).
 local function to_color(colorVal)
 	if type(colorVal) == 'table' then
 		return { colorVal[1], colorVal[2], colorVal[3], colorVal[4] }
@@ -81,7 +62,6 @@ local function to_color(colorVal)
 	return { colorVal.x, colorVal.y, colorVal.z, colorVal.w }
 end
 
---- Color picker bound to t[k] ({r,g,b,a} floats); marks dirty on change.
 local function color(label, t, k)
 	local colorVal, changed = ImGui.ColorEdit4(label, t[k])
 	if changed then
@@ -90,12 +70,10 @@ local function color(label, t, k)
 	end
 end
 
---- A greyed-out one-liner under the widget above it.
 local function hint(text)
 	ImGui.TextDisabled('(' .. text .. ')')
 end
 
---- One "Tank: Fippy (id 1234)" / "Tank: none assigned" line.
 local function role_line(label, id, name)
 	if id then
 		ImGui.TextColored(0.5, 1.0, 0.5, 1.0, string.format('%s: %s (id %d)', label, name or '?', id))
@@ -104,7 +82,6 @@ local function role_line(label, id, name)
 	end
 end
 
---- The marker style block, shared by the tank and assist tabs.
 ---@param style MarkerStyle
 ---@param extra fun()|nil  # per-marker widgets (ring count / helix turns)
 local function marker_style(style, extra)
@@ -120,8 +97,6 @@ local function marker_style(style, extra)
 	check('Ground ring', style, 'groundRing')
 end
 
---- Render the settings window (call every frame from the ImGui callback;
---- no-op while closed).
 function M.draw()
 	if not M.open then
 		return
@@ -139,8 +114,8 @@ function M.draw()
 			settings.set_scope('char')
 		end
 		ImGui.SameLine()
-		if ImGui.RadioButton('This server', settings.scope == 'server') then
-			settings.set_scope('server')
+		if ImGui.RadioButton('This class', settings.scope == 'class') then
+			settings.set_scope('class')
 		end
 		ImGui.SameLine()
 		if ImGui.RadioButton('All characters', settings.scope == 'global') then
@@ -158,8 +133,6 @@ function M.draw()
 			ImGui.Text(string.format('Tinted %d   Ambient %d   Casts %d',
 				st.litCount or 0, st.ambientCount or 0, st.castCount or 0))
 
-			-- The budget bar is the thing to watch: pegged at 100%% means the
-			-- ambient layer is being thinned to fit.
 			local used, cap = st.lineCount or 0, max(1, st.budget or 1)
 			local frac = used / cap
 			if frac > 0.98 then
@@ -258,7 +231,6 @@ function M.draw()
 			ImGui.Spacing()
 			slideri('Scan radius', cfg.ambient, 'radius', 20, 400)
 			slideri('Max spawns', cfg.ambient, 'maxSpawns', 1, 60)
-			check('Nearest first when over the cap', cfg.ambient, 'nearestFirst')
 			check('Line of sight only', cfg.ambient, 'losOnly')
 			check('Players too, not just NPCs', cfg.ambient, 'includePCs')
 			check('Fade with distance', cfg.ambient, 'fadeFar')

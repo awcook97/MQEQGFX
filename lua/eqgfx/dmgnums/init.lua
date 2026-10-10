@@ -1,28 +1,3 @@
---[[
-  dmgnums/init.lua - floating combat damage numbers over spawns.
-
-  Events:     native eqgfx.poll_damage() - the MQEQGFX plugin detours the
-              client's own CEverQuest::ReportSuccessfulHit/Heal, so every
-              melee hit, spell DD, DoT tick, miss (defense codes) and heal
-              arrives here with attacker/target spawn IDs - no chat parsing.
-  Projection: native eqgfx world->screen (numbers stick to the spawn).
-  Drawing:    ImGui draw list inside the same fullscreen pass-through overlay
-              trick nameplates use (numbers stay under other ImGui windows).
-
-  Classification:
-    kind    melee | spells | dots | heals | misses
-            (spells vs dots = spell duration lookup, cached per spell ID;
-             misses = DamageCaused <= 0 defense codes -> label text)
-    source  mine | pet | others | incoming   (relative to me)
-  Both are filterable per-cell from /dnmenu - the in-game filter grid.
-
-  Run:  /lua run eqgfx/dmgnums
-  Stop: /lua stop eqgfx/dmgnums
-  Opts: /dnmenu     in-game customization window (auto-saved settings)
-        /dmgnums    quick enable/disable toggle
-        /dntest     spawn one sample of every category over your target
-]]
-
 local mq    = require('mq')
 local eqgfx = require('eqgfx')
 local ImGui = require('ImGui')
@@ -43,6 +18,8 @@ log.SetIncludeTime('milliseconds')
 log.SetLevel(log.INFO)
 log.SetOutputFile(mq.configDir .. '/eqgfx.log')
 
+pause.wait_for_game()
+
 local ok, err = eqgfx.init()
 if not ok then log.Error('init failed: %s', err) return end
 if not eqgfx.poll_damage then
@@ -52,12 +29,8 @@ end
 
 settings.load()
 
-----------------------------------------------------------------------------
--- Small animation helpers (self-contained; mirror nameplates/anim.lua).
-----------------------------------------------------------------------------
 local function clamp01(v) return v < 0 and 0 or (v > 1 and 1 or v) end
 
---- Overshoot ease for the spawn pop (eases 0..1 with a little bounce past 1).
 local function ease_out_back(t)
   t = clamp01(t)
   local c1, c3 = 1.70158, 2.70158
@@ -65,21 +38,16 @@ local function ease_out_back(t)
   return 1 + c3 * u * u * u + c1 * u * u
 end
 
-----------------------------------------------------------------------------
--- Live floaters.
-----------------------------------------------------------------------------
 ---@type DmgFloater[]
 local floaters = {}
 
--- Per-spawn burst tracking for stackNudge: rapid consecutive numbers on the
--- same spawn spawn a bit higher so they don't overlap each other.
-local lastBurst = {}   -- spawnID -> { at = frameTime, n = count }
+local lastBurst = {}
 
--- spellID -> true (DoT) / false (DD); duration lookup done once per spell.
 local dotCache = {}
 
-local FRAME_DT = 1 / 35
-local animNow  = 0
+local MAX_FLOATERS = 500
+
+local animNow       = mq.gettime() / 1000
 
 local function is_dot(spellID)
   local hit = dotCache[spellID]
@@ -92,8 +60,6 @@ local function is_dot(spellID)
   return dotCache[spellID]
 end
 
---- Bucket one native damage event: which filter cell it belongs to and which
---- spawn the number floats over. Returns nil when it should be dropped.
 ---@return string|nil source, string|nil kind, integer|nil anchorID
 local function classify(ev, cfg, myID, petID)
   local source
@@ -107,14 +73,12 @@ local function classify(ev, cfg, myID, petID)
   if ev.heal then
     kind = types.Kind.HEALS
   elseif ev.isDotTick then
-    kind = types.Kind.DOTS      -- from the "has taken N damage" chat tap; known DoT
+    kind = types.Kind.DOTS
   elseif ev.spellID and ev.spellID > 0 then
-    -- Spell / DoT. damage <= 0 here is a resist or the DoT's initial landing
-    -- (0 immediate damage) - NOT a melee "miss"; drop it so it doesn't floater.
     if ev.damage <= 0 then return nil end
     kind = is_dot(ev.spellID) and types.Kind.DOTS or types.Kind.SPELLS
   elseif ev.damage <= 0 then
-    kind = types.Kind.MISSES   -- melee only: defensive codes (miss/dodge/parry/...)
+    kind = types.Kind.MISSES
   else
     kind = types.Kind.MELEE
   end
@@ -124,14 +88,11 @@ local function classify(ev, cfg, myID, petID)
   if kind ~= types.Kind.MISSES and kind ~= types.Kind.HEALS
       and ev.damage < (cfg.minDamage or 0) then return nil end
 
-  -- Where the number floats: over the victim/healed spawn; incoming
-  -- optionally over my own head (classic style).
   local anchor = ev.targetID
   if source == types.Source.INCOMING and cfg.incomingOverSelf then anchor = myID end
   return source, kind, anchor
 end
 
---- Color for a source+kind cell (heals split by direction).
 local function color_for(cfg, source, kind)
   local c = cfg.colors
   if kind == types.Kind.MISSES then return c.miss end
@@ -154,7 +115,6 @@ local function color_for(cfg, source, kind)
   return c.myMelee
 end
 
---- "12345" -> "12.3k" (only at >= 10000, and only when cfg wants it).
 local function fmt_amount(cfg, n)
   if cfg.text.abbreviate and n >= 10000 then
     local s = string.format('%.1fk', n / 1000)
@@ -163,8 +123,6 @@ local function fmt_amount(cfg, n)
   return tostring(n)
 end
 
---- Turn one classified event into a live floater. `dist` is how far the
---- anchor spawn is, for the distance size falloff (nil = full size).
 local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
   local text, sub
   if kind == types.Kind.MISSES then
@@ -179,7 +137,6 @@ local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
     pcall(function() sub = mq.TLO.Spell(ev.spellID).Name() end)
   end
 
-  -- size scaling by damage
   local size = cfg.text.size
   if cfg.text.scaleWithDamage and kind ~= types.Kind.MISSES and ev.damage > 0 then
     local f = clamp01(ev.damage / math.max(cfg.text.bigAt, 1))
@@ -188,7 +145,6 @@ local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
   local dscale = distscale.factor(cfg.distScale, dist)
   size = size * dscale
 
-  -- burst nudge: numbers landing on the same spawn in quick succession start higher
   local nudge = 0
   if cfg.anim.stackNudge then
     local b = lastBurst[anchorID]
@@ -210,6 +166,7 @@ local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
     vy = cfg.anim.riseSpeed * (0.8 + math.random() * 0.6)
   end
 
+  if #floaters >= MAX_FLOATERS then table.remove(floaters, 1) end
   floaters[#floaters + 1] = {
     spawnID = anchorID,
     text = text, sub = sub,
@@ -222,17 +179,11 @@ local function spawn_floater(cfg, source, kind, anchorID, ev, dist)
   }
 end
 
-----------------------------------------------------------------------------
--- Event intake: classify -> filter -> range -> spawn. Shared by the native
--- poll_damage feed and the DoT-tick chat tap.
-----------------------------------------------------------------------------
 local function handle_event(ev, cfg, myID, petID, tgtID)
   local source, kind, anchorID = classify(ev, cfg, myID, petID)
   if not (source and anchorID and anchorID > 0) then return end
-  -- outgoing target-only filter
   if cfg.targetOnly and (source == types.Source.MINE or source == types.Source.PET)
       and anchorID ~= tgtID then return end
-  -- range filter on the anchor spawn
   local spawn = mq.TLO.Spawn(anchorID)
   local dist = (spawn.ID() == anchorID) and spawn.Distance3D() or nil
   if dist and dist <= cfg.radius then
@@ -240,7 +191,6 @@ local function handle_event(ev, cfg, myID, petID, tgtID)
   end
 end
 
---- Native combat feed (runs inside the draw callback, before rendering).
 local function intake(cfg)
   local events = eqgfx.poll_damage()
   if #events == 0 then return end
@@ -252,12 +202,6 @@ local function intake(cfg)
   end
 end
 
-----------------------------------------------------------------------------
--- DoT-tick chat tap. DoT ticks are periodic and reported via chat, NOT through
--- the native ReportSuccessfulHit path (which only fires for the DoT's landing).
--- The two "has taken N damage" formats (eqstr 9072 / 13327) are distinct from
--- direct-nuke messages, so this doesn't double-count nukes.
-----------------------------------------------------------------------------
 local function to_dmg(s) return tonumber((tostring(s):gsub('[^%d]', ''))) end
 
 local function spawn_id(name, myID, myName)
@@ -267,9 +211,9 @@ local function spawn_id(name, myID, myName)
   return id or 0
 end
 
---- Feed one DoT tick (from either chat format) through the shared handler.
 local function feed_dot(cfg, casterID, targetID, dmg)
   if not cfg.enabled or not dmg or dmg <= 0 or targetID == 0 then return end
+  if pause.active(cfg.pause) then return end
   local myID = mq.TLO.Me.ID() or 0
   local petID = mq.TLO.Me.Pet.ID() or 0
   local tgtID = mq.TLO.Target.ID() or 0
@@ -278,9 +222,6 @@ local function feed_dot(cfg, casterID, targetID, dmg)
                cfg, myID, petID, tgtID)
 end
 
-----------------------------------------------------------------------------
--- Rendering.
-----------------------------------------------------------------------------
 local OVERLAY_FLAGS = bit.bor(
   ImGuiWindowFlags.NoTitleBar, ImGuiWindowFlags.NoResize, ImGuiWindowFlags.NoMove,
   ImGuiWindowFlags.NoScrollbar, ImGuiWindowFlags.NoScrollWithMouse,
@@ -293,9 +234,6 @@ local function u32(c, alphaMult)
   return ImGui.ColorConvertFloat4ToU32({ c[1], c[2], c[3], c[4] * (alphaMult or 1) })
 end
 
--- Sized AddText(font, size, pos, col, str) availability - probed once, same
--- trick as nameplates/render.lua. Without it, numbers draw at the default
--- font size (still fully functional).
 local sizedText = nil
 local function probe_sized(drawList)
   if sizedText ~= nil then return end
@@ -304,7 +242,6 @@ local function probe_sized(drawList)
   end)
 end
 
---- One AddText at (tx, y) honoring the sized-text capability.
 local function add_text(drawList, tx, y, size, col, str)
   if sizedText then
     drawList:AddText(ImGui.GetFont(), size, ImVec2(tx, y), col, str)
@@ -313,7 +250,6 @@ local function add_text(drawList, tx, y, size, col, str)
   end
 end
 
---- Draw text with the configured shadow/outline, centered on x.
 local function draw_text(drawList, cfg, x, y, size, c, alpha, str)
   local w = ImGui.CalcTextSize(str)
   if sizedText then w = w * (size / (ImGui.GetFontSize() or 13)) end
@@ -341,11 +277,10 @@ local function under_ui(x, y)
 end
 
 local function draw_floaters(drawList, cfg)
-  if cfg.hideUnderUI and uirects.native then
-    local rect = uirects.get()
-    if #rect > 0 or uirects.proven then uiRects = rect end
-  end
+  if #floaters == 0 then return end
+  if cfg.hideUnderUI then uiRects = uirects.get() end
 
+  local anchored, anchorX, anchorY = {}, {}, {}
   local alive = 0
   for i = 1, #floaters do
     local f = floaters[i]
@@ -354,15 +289,19 @@ local function draw_floaters(drawList, cfg)
       alive = alive + 1
       floaters[alive] = f
 
-      -- anchor: live spawn position while it exists, else last screen pos
-      local spawn = mq.TLO.Spawn(f.spawnID)
-      if spawn.ID() == f.spawnID and spawn.X() then
-        local sx, sy, vis = eqgfx.world_to_screen(spawn.X(), spawn.Y(), (spawn.Z() or 0) + cfg.zOffset)
-        if vis then f.sx, f.sy = sx, sy end
+      local sid = f.spawnID
+      if not anchored[sid] then
+        anchored[sid] = true
+        local spawn = mq.TLO.Spawn(sid)
+        local px = spawn.ID() == sid and spawn.X()
+        if px then
+          local sx, sy, vis = eqgfx.world_to_screen(px, spawn.Y(), (spawn.Z() or 0) + cfg.zOffset)
+          if vis then anchorX[sid], anchorY[sid] = sx, sy end
+        end
       end
+      if anchorX[sid] then f.sx, f.sy = anchorX[sid], anchorY[sid] end
 
       if f.sx then
-        -- motion by style
         local ox, oy = f.dx, -(f.dy0 or 0)
         local style = cfg.anim.style
         if style == types.AnimStyle.FLOAT then
@@ -372,14 +311,12 @@ local function draw_floaters(drawList, cfg)
           oy = oy - (f.vy * age - 0.5 * cfg.anim.gravity * age * age)
         end
 
-        -- alpha: hold, then fade to 0 across the tail of the lifetime
         local alpha = 1.0
         local fadeFrom = cfg.anim.fadeStart * cfg.anim.duration
         if age > fadeFrom then
           alpha = 1 - (age - fadeFrom) / math.max(cfg.anim.duration - fadeFrom, 0.01)
         end
 
-        -- pop-in scale
         local size = f.size
         if cfg.anim.popIn and age < cfg.anim.popDur then
           size = size * ease_out_back(age / cfg.anim.popDur)
@@ -402,7 +339,7 @@ end
 local drawErrLogged = false
 
 local function draw()
-  animNow = animNow + FRAME_DT
+  animNow = mq.gettime() / 1000
   local cfg = settings.data or {}
 
   if cfg.enabled and not pause.active(cfg.pause) then
@@ -426,7 +363,7 @@ local function draw()
     ImGui.End()
   else
     if #floaters > 0 then floaters = {} end
-    eqgfx.poll_damage()   -- keep draining so re-enable doesn't burst-replay
+    eqgfx.poll_damage()
   end
 
   menu.draw()
@@ -434,11 +371,6 @@ end
 
 mq.imgui.init('eqgfx_dmgnums', draw)
 
-----------------------------------------------------------------------------
--- DoT-tick chat events (processed by mq.doevents() in the main loop).
---   eqstr 9072:  "%1 has taken %2 damage from your %3."   (my DoT)
---   eqstr 13327: "%1 has taken %2 damage from %3 by %4."  (someone's DoT)
-----------------------------------------------------------------------------
 mq.event('dn_dot_mine', '#1# has taken #2# damage from your #3#.#*#', function(_, target, dmgStr)
   local cfg = settings.data
   local myID, myName = mq.TLO.Me.ID() or 0, mq.TLO.Me.CleanName() or ''
@@ -451,9 +383,6 @@ mq.event('dn_dot_other', '#1# has taken #2# damage from #3# by #4#.#*#', functio
   feed_dot(cfg, spawn_id(caster, myID, myName), spawn_id(target, myID, myName), to_dmg(dmgStr))
 end)
 
-----------------------------------------------------------------------------
--- Binds.
-----------------------------------------------------------------------------
 mq.bind('/dnmenu', function() menu.toggle() end)
 
 mq.bind('/dmgnums', function()
@@ -463,8 +392,6 @@ mq.bind('/dmgnums', function()
   log.Info('damage numbers %s', cfg.enabled and 'ON' or 'OFF')
 end)
 
--- One fake event per category over the target (self if none) - for tuning
--- looks without needing combat.
 mq.bind('/dntest', function()
   local cfg = settings.data
   local anchorID = mq.TLO.Target.ID() or 0
@@ -479,7 +406,6 @@ mq.bind('/dntest', function()
     { source = types.Source.MINE,     kind = types.Kind.HEALS,  ev = { damage = 512 } },
   }
   for n, s in ipairs(samples) do
-    -- stagger the spawns a touch so they read as a burst, not a clump
     local born = animNow + (n - 1) * 0.12
     local saved = animNow
     animNow = born
@@ -491,12 +417,8 @@ end)
 
 log.Info('damage numbers up - /dnmenu to customize, /dntest to preview')
 
-----------------------------------------------------------------------------
--- Main loop: settings persistence only (events + drawing live in the draw
--- callback; poll_damage is drained there every frame).
-----------------------------------------------------------------------------
 while true do
   mq.doevents()
-  settings.maybe_save(log)
+  settings.maybe_save()
   mq.delay(100)
 end
