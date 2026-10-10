@@ -1,33 +1,3 @@
---[[
-  nameplates/ae.lua - which plates will the in-flight AE casts affect?
-
-  EVERY active cast the shared tracker knows about (mine via Me.Casting,
-  others via the plugin's per-spawn cast state, or the chat fallback when the
-  plugin feed is absent) is turned into a per-frame area - caster circle,
-  target circle, cone or beam, the same shapes indicators/ draws - and every
-  plate is tested against every area.
-
-  Who gets marked follows the caster's alignment:
-    detrimental -> the caster's ENEMIES: PC/pet/merc casts mark NPC plates,
-                   NPC casts mark PC plates (incl. mine - the "move!" cue).
-                   NPC AEs never mark other NPCs.
-    beneficial  -> the caster's ALLIES: PC-side casts mark PC plates,
-                   NPC casts mark NPC plates (mob healers).
-  Group-target spells (Group v1/v2) only resolve when the caster is me or in
-  MY group (their group = my group); other casters' groups are unknowable, so
-  those casts mark nothing. Target-centered AEs from another caster resolve
-  only when I have the caster targeted (Target.AggroHolder names its victim).
-
-  Marks STACK: init.lua counts how many areas cover a plate and maps the
-  count onto a highlight alpha curve (cfg.aehl.stackBase/stackStep/stackMax -
-  default 1 AE = 0.5, each extra +0.1, capped at 5).
-
-  states() is recomputed every frame (everyone moves while casts are in
-  flight); per-caster spell data (geometry + beneficial flag + caster side)
-  is cached per spell ID. Circles test 3D distance; cones and beams are
-  heading-planar so they test in 2D, matching what indicators draws.
-]]
-
 local mq    = require('mq')
 local eqgfx = require('eqgfx')
 local casts = require('eqgfx.casts')
@@ -39,7 +9,6 @@ local TARGET_CENTERED = core.TargetCentered
 
 local GROUP_ONLY = { [TT.Group_v1] = true, [TT.Group_v2] = true }
 
--- Beneficial fallback by target type, for when Spell.Beneficial is unreadable.
 local BEN_TYPES = { [TT.Group_v1] = true, [TT.Group_v2] = true, [TT.AEPC_v1] = true,
                     [TT.AEPC_v2] = true, [TT.CasterAreaPC] = true }
 
@@ -61,19 +30,14 @@ local M = {}
 ---@field fy number|nil
 ---@field groupOnly boolean  marks only my group (caster is me / in my group)
 
--- Per-caster spell cache: spellID -> geometry/beneficial/side. Pruned when
--- the caster's cast expires out of the tracker.
 local perCaster = {}
 
---- EQ heading (deg, 0=N, clockwise) -> world atan2 angle. Same convention as
---- indicators/render.lua facing_rad(); keep them in lockstep.
 ---@param deg number|nil # Spawn.Heading.Degrees()
 ---@return number rad # angle usable with math.cos/sin in world X/Y
 local function facing_rad(deg)
   return math.rad(90 + (deg or 0))
 end
 
---- IDs of everyone in my group (used to resolve group-target spells).
 ---@return table<integer, boolean> ids
 local function my_group_ids()
   local ids = {}
@@ -87,9 +51,6 @@ local function my_group_ids()
   return ids
 end
 
---- One cast -> AeState, or nil when it has no resolvable area footprint
---- (single-target/self spells, unknowable group casts, unresolved victims,
---- filtered sources).
 ---@param id integer # caster spawn ID
 ---@param castInfo CastInfo # from the shared tracker
 ---@param myID integer # my spawn ID
@@ -104,7 +65,6 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
   if not castInfo.spellID then return nil end
   local isSelf = castInfo.isSelf or id == myID
 
-  -- caster side + live position (pets/mercs cast on the players' side)
   local cx, cy, cz, headingDeg, side, src
   local spawn
   if isSelf then
@@ -144,8 +104,8 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
 
   local groupOnly = false
   if GROUP_ONLY[tt] then
-    if side ~= 'pc' then return nil end          -- NPC "groups" are unknowable
-    if not isSelf and not groups()[id] then return nil end  -- their group ≠ mine
+    if side ~= 'pc' then return nil end
+    if not isSelf and not groups()[id] then return nil end
     groupOnly = true
   end
 
@@ -161,7 +121,7 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
     if radius <= 0 then return nil end
     st.r2 = radius * radius
     if math.abs(geom.coneEnd - geom.coneStart) < 0.5 then
-      st.shape = 'circle'   -- degenerate cone = full circle (as drawn)
+      st.shape = 'circle'
     else
       headingDeg = isSelf and mq.TLO.Me.Heading.Degrees() or spawn.Heading.Degrees()
       local facing = facing_rad(headingDeg)
@@ -170,7 +130,6 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
       st.mid   = (a0 + a1) * 0.5
       st.half  = math.abs(a1 - a0) * 0.5
     end
-
   elseif tt == TT.Beam then
     local len = (geom.range and geom.range > 0) and geom.range or radius
     if len <= 0 then return nil end
@@ -180,16 +139,12 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
     st.len   = len
     st.hw    = (geom.aeRange and geom.aeRange > 0) and geom.aeRange or 5
     st.fx, st.fy = math.cos(facing), math.sin(facing)
-
   elseif CASTER_CENTERED[tt] then
     if radius <= 0 then return nil end
     st.shape = 'circle'
     st.r2    = radius * radius
-
   elseif TARGET_CENTERED[tt] then
     if radius <= 0 then return nil end
-    -- victim: my own target for my casts; for another caster only resolvable
-    -- when I have THEM targeted (Target.AggroHolder names their victim)
     local vx, vy, vz
     local tgt = mq.TLO.Target
     local tid = tgt.ID() or 0
@@ -206,21 +161,13 @@ local function state_for(id, castInfo, myID, meX, meY, meZ, aehl, groups)
     st.shape = 'circle'
     st.r2    = radius * radius
     st.cx, st.cy, st.cz = vx, vy, vz
-
   else
-    return nil    -- single target / self: no area footprint
+    return nil
   end
 
   return st
 end
 
---- All areas currently in flight: one AeState per active cast that has a
---- resolvable footprint. Recompute every frame - casters, victims and
---- facings move while casts are in flight.
----
---- ```lua
---- local aeStates = cfg.aehl.enabled and ae.states(cfg, mex, mey, mez) or nil
---- ```
 ---@param cfg NameplatesConfig # the nameplates settings (reads cfg.aehl)
 ---@param meX number # my position (the caller already read it)
 ---@param meY number
@@ -246,17 +193,6 @@ function M.states(cfg, meX, meY, meZ)
   return out
 end
 
---- Will this plate be affected by one area? Eligibility first (which side
---- the area marks; group spells -> my group only; pets and mercs are never
---- marked), then the geometric test at the spawn's live position. Circles
---- test 3D distance; cones/beams are heading-planar (2D).
----
---- ```lua
---- for _, st in ipairs(aeStates) do
----   local kind = ae.affects(st, plate, x, y, z)   -- 'det' | 'ben' | nil
----   if kind == 'det' then detN = detN + 1 end
---- end
---- ```
 ---@param st AeState # one area from states()
 ---@param plate Plate # the plate being tested (kind/isSelf/inGroup matter)
 ---@param x number # the spawn's live position (TLO order)
@@ -278,7 +214,7 @@ function M.affects(st, plate, x, y, z)
     if dx * dx + dy * dy > st.r2 then return nil end
     local diff = (math.atan2(dy, dx) - st.mid + math.pi) % (2 * math.pi) - math.pi
     if math.abs(diff) > st.half then return nil end
-  else -- beam
+  else
     local along = dx * st.fx + dy * st.fy
     if along < 0 or along > st.len then return nil end
     local perp = dy * st.fx - dx * st.fy

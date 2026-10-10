@@ -1,32 +1,24 @@
---[[
-  indicators/settings.lua - AE indicator defaults, persisted via the shared
-  scoped store (eqgfx.lib.settings) under <config>/eqgfx/ (see lib/settings).
-  An old-style <config>/eqgfx_indicator.lua is imported once if present.
-]]
-
 local mq    = require('mq')
 local Store = require('eqgfx.lib.settings')
 
--- The defaults, checked against the IndicatorsConfig classes declared in
--- indicators/_types.lua - drift between them is a diagnostic.
 ---@type IndicatorsConfig
 local DEFAULTS = {
   showEnemies   = true,
   showFriendly  = false,
   showSelf      = true,
-  showAoE       = true,   -- caster-centered circles (PBAE etc.)
+  showAoE       = true,
   showCones     = true,
   showBeams     = true,
-  showTargetAoE = true,   -- target-centered circles
-  showLines     = true,   -- single-target caster->target lines
+  showTargetAoE = true,
+  showLines     = true,
   showDebugRing = false,
-  genericMarker = true,   -- show a marker when the spell can't be identified
+  genericMarker = true,
   radius        = 250,
   groundOffset  = 5.0,
   debugRadius   = 40,
-  pause = {                      -- stop drawing when nobody can see the areas
-    whenBackground   = false,    -- backgrounded but still rendering: boxers watch those windows
-    whenNotRendering = true,     -- the frame limiter has stopped drawing the scene
+  pause = {
+    whenBackground   = false,
+    whenNotRendering = true,
   },
   colors = {
     enemyFill  = { 1.00, 0.51, 0.51, 0.27 },
@@ -35,14 +27,12 @@ local DEFAULTS = {
     friendLine = { 0.30, 0.60, 1.00, 0.86 },
     selfFill   = { 0.51, 1.00, 0.51, 0.27 },
     selfLine   = { 0.24, 1.00, 0.24, 0.86 },
-    line       = { 1.00, 0.85, 0.20, 0.90 },  -- single-target line
+    line       = { 1.00, 0.85, 0.20, 0.90 },
     debugFill  = { 0.00, 1.00, 1.00, 0.20 },
     debugLine  = { 0.00, 1.00, 1.00, 0.86 },
   },
 }
 
---- The indicators settings store: a SettingsStore whose .data is typed as
---- the IndicatorsConfig tree.
 ---@class IndicatorsStore: SettingsStore
 ---@field data IndicatorsConfig
 

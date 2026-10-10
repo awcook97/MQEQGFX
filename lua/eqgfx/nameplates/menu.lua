@@ -1,17 +1,9 @@
---[[
-  nameplates/menu.lua - the in-game customization window (/npmenu).
-
-  Every widget writes straight into settings.data and marks it dirty; the main
-  loop debounce-saves to mq.configDir/eqgfx_nameplates.lua.
-]]
-
 local ImGui = require("ImGui")
 local types = require("eqgfx.nameplates._types")
 local settings = require("eqgfx.nameplates.settings")
 
 local M = { open = false }
 
---- Show/hide the settings window (the /npmenu bind).
 function M.toggle()
 	M.open = not M.open
 end
@@ -22,7 +14,6 @@ local function mark()
 	settings.mark_dirty()
 end
 
---- Checkbox bound to t[k]; marks the settings dirty on change.
 ---@param label string
 ---@param t table # settings subtable
 ---@param k string # key within t
@@ -34,7 +25,6 @@ local function check(label, t, k)
 	end
 end
 
---- Integer slider bound to t[k]; marks dirty on change.
 ---@param label string
 ---@param t table # settings subtable
 ---@param k string # key within t
@@ -48,7 +38,6 @@ local function slideri(label, t, k, lo, hi)
 	end
 end
 
---- Float slider bound to t[k]; marks dirty on change.
 ---@param label string
 ---@param t table # settings subtable
 ---@param k string # key within t
@@ -63,8 +52,6 @@ local function sliderf(label, t, k, lo, hi, fmt)
 	end
 end
 
---- Keep colors as plain number tables (pickle-safe) regardless of what the
---- binding hands back (table vs ImVec4).
 ---@param colorVal table|any # ImGui ColorEdit4 result
 ---@return number[] color # plain {r,g,b,a}
 local function to_color(colorVal)
@@ -74,7 +61,6 @@ local function to_color(colorVal)
 	return { colorVal.x, colorVal.y, colorVal.z, colorVal.w }
 end
 
---- Color picker bound to t[k] ({r,g,b,a} floats); marks dirty on change.
 ---@param label string
 ---@param t table # settings subtable (usually cfg.colors)
 ---@param k string # key within t
@@ -86,7 +72,6 @@ local function color(label, t, k)
 	end
 end
 
---- Combo box bound to t[k] (1-based index into items); marks dirty on change.
 ---@param label string
 ---@param t table # settings subtable
 ---@param k string # key within t
@@ -99,7 +84,6 @@ local function combo(label, t, k, items)
 	end
 end
 
---- Inline remove-button list editor (whitelist/blacklist entries).
 ---@param tag string # unique widget id prefix
 ---@param list string[] # edited in place
 local function list_editor(tag, list)
@@ -114,9 +98,6 @@ local function list_editor(tag, list)
 	end
 end
 
---- Render the settings window (call every frame from the ImGui callback;
---- no-op while closed). Widgets write straight into settings.data and the
---- main loop debounce-saves.
 ---@param caps RenderCaps # render capability flags (degraded-feature notes)
 function M.draw(caps)
 	if not M.open then
@@ -132,8 +113,8 @@ function M.draw(caps)
 			settings.set_scope("char")
 		end
 		ImGui.SameLine()
-		if ImGui.RadioButton("This server", settings.scope == "server") then
-			settings.set_scope("server")
+		if ImGui.RadioButton("This class", settings.scope == "class") then
+			settings.set_scope("class")
 		end
 		ImGui.SameLine()
 		if ImGui.RadioButton("All characters", settings.scope == "global") then
@@ -223,7 +204,7 @@ function M.draw(caps)
 			end
 			color("Name color", cfg.colors, "name")
 			combo("PC anonymity", cfg.name, "anonMode", types.AnonModeLabels)
-			check("Background", cfg.name, "background")
+			check("Background##name", cfg.name, "background")
 			if cfg.name.background then
 				slideri("  Padding", cfg.name, "bgPadding", 0, 8)
 				color("  Background color", cfg.colors, "nameBg")

@@ -1,11 +1,3 @@
---[[
-  nameplates/ui_windows.lua - native EQ UI window names used for plate
-  occlusion. Generated from "List of available windows.md" (client dump via
-  /windows). Many entries are sub-screens/templates that never resolve as
-  top-level windows; the scanner probes them lazily and only tracks the ones
-  that actually report Open with a real rect.
-]]
-
 return {
   'AAW_ArchetypePage',
   'AAW_ClassPage',

@@ -1,10 +1,12 @@
-/*
- * MQEQGFX.h - state shared between the plugin's translation units.
- * Anything used by only one file stays in that file's anonymous namespace.
- */
 #pragma once
 
+#if !defined(_WIN64)
+#error "MQEQGFX requires the 64-bit client"
+#endif
+
 #include <mq/Plugin.h>
+
+#include "Detours.h"
 
 #include "model/eqg.h"
 #include "model/dds.h"
@@ -18,16 +20,12 @@
 #include <tuple>
 #include <vector>
 
-// ---------------------------------------------------------------------------
-// Cast-start events (Spells.cpp), buffered until Lua drains them via
-// poll_casts(). One consumer by design.
-
 struct CastEvent
 {
 	int spellId;
 	int spawnId;
 	uint32_t castTimeMs;
-	uint32_t timestampMs;                       // pDisplay->TimeStamp at arrival
+	uint32_t timestampMs;
 };
 
 constexpr size_t kMaxCastEvents = 64;
@@ -40,162 +38,307 @@ void RemoveCastTap();
 void PulseCastTap();
 
 #ifdef CEverQuest__StartCasting_x
-extern bool s_castTapInstalled;                 // one of the two modes is active
-extern bool s_castTapFailed;                    // detour conflict - don't retry every pulse
-extern bool s_castTrackerOwned;                 // mode 3: detour + sweep + extension are ours
+extern bool s_castTapInstalled;
+extern bool s_castTapFailed;
+extern bool s_castTrackerOwned;
 #endif
-
-// ---------------------------------------------------------------------------
-// Combat damage/heal events (CombatNumbers.cpp), buffered until Lua drains
-// them via poll_damage(). One consumer by design.
 
 struct DamageEvent
 {
-	int attackerId;         // heal: the healer
-	int targetId;           // heal: the spawn healed
-	int damage;             // >0 dealt; <=0 miss/defense code (heal: amount landed)
-	int spellId;            // >0 for spell/DoT damage (heal: the healing spell)
-	int skill;              // attack skill for melee
+	int attackerId;
+	int targetId;
+	int damage;
+	int spellId;
+	int skill;
 	bool heal;
-	int totalHeal;          // heal only: pre-cap amount (overheal = total - damage)
-	uint32_t flags;         // hit: EQSuccessfulHit.Flags; heal: HealFlag_* bits
-	uint32_t timestampMs;   // pDisplay->TimeStamp at arrival
+	int totalHeal;
+	uint32_t flags;
+	uint32_t timestampMs;
 };
 
-// EQSuccessfulHeal.EffectBitmask bits
 enum : uint32_t
 {
-	HealFlag_AltMessage = 0x01,   // alternate message strings; with 0x20/0x40 suppresses spell-landed
-	HealFlag_OverTime   = 0x02,   // heal-over-time chat channels
+	HealFlag_AltMessage = 0x01,
+	HealFlag_OverTime   = 0x02,
 	HealFlag_Critical   = 0x04,
 	HealFlag_Lucky      = 0x08,
 	HealFlag_Twincast   = 0x10,
-	HealFlag_NoLandMsg1 = 0x20,   // suppresses the spell-landed message
-	HealFlag_NoLandMsg2 = 0x40,   // suppresses the spell-landed message
+	HealFlag_NoLandMsg1 = 0x20,
+	HealFlag_NoLandMsg2 = 0x40,
 };
 
-// EQSuccessfulHit.Flags bits. Note these differ from the heal bits above.
-// The named modifiers only fire on spell damage (Skill 0xe7); melee crit/
-// crippling-blow flags are decoded downstream in the chat formatter, not here.
 enum : uint32_t
 {
 	HitFlag_Critical = 0x80,
 	HitFlag_Lucky    = 0x100,
 	HitFlag_Twincast = 0x20000,
-	HitFlag_Locked   = 0x100000,  // overrides Lucky; the client clears the other bits when set
+	HitFlag_Locked   = 0x100000,
 };
 
 constexpr size_t kMaxDamageEvents = 256;
 
 extern std::mutex               s_dmgMutex;
 extern std::vector<DamageEvent> s_dmgEvents;
-extern std::atomic<bool>        s_dmgDebug;     // /eqgfx dmgdebug chat-logging
+extern std::atomic<bool>        s_dmgDebug;
 extern bool                     s_dmgTapInstalled;
 
 void InstallDamageTap();
 void RemoveDamageTap();
 
-// ---------------------------------------------------------------------------
-// Live-captured appearance, owned by Models.cpp: the ordered material-rename
-// stream + worn head recorded from the game's own appearance calls.
+struct MatEvent { std::string a; std::string b; uint32_t tint; };
 
-struct MatEvent { std::string a; std::string b; uint32_t tint; };   // normalized, no _mdf
-
-constexpr size_t kMaxMatEvents = 4096;          // ring cap (replay is self-correcting)
+constexpr size_t kMaxMatEvents = 4096;
 
 extern std::mutex            s_capMutex;
-extern std::vector<MatEvent> s_matEvents;       // guarded - ordered rename log
-extern std::string           s_headMesh;        // guarded - worn head mesh (lower)
-extern uint32_t              s_headTint;        // guarded - head dye (0xRRGGBB)
-extern bool                  s_haveCapture;     // guarded
-extern std::string           s_captureActorDef; // guarded - whose look this is
-extern std::atomic<bool>     s_captureDirty;    // unsaved changes since last flush
-extern bool                  s_captureInstalled;// detours live?
-extern bool                  s_captureVerbose;  // /eqgfx capture -> also chat-log each call
+extern std::vector<MatEvent> s_matEvents;
+extern std::string           s_headMesh;
+extern uint32_t              s_headTint;
+extern bool                  s_haveCapture;
+extern std::string           s_captureActorDef;
+extern std::atomic<bool>     s_captureDirty;
+extern bool                  s_captureInstalled;
+extern bool                  s_captureVerbose;
 
 bool InstallSwapCapture(bool auto_ = false);
 void RemoveSwapCapture();
 void SaveCapture();
 bool LoadCapture(const std::string& actorDef);
 
-// ---------------------------------------------------------------------------
-// Self-parsed model view (Models.cpp owns the pipeline; the /eqgfx command and
-// OnPulse in MQEQGFX.cpp drive it).
-
-extern eqgfx::render::ModelView s_modelView;    // render thread only
+extern eqgfx::render::ModelView s_modelView;
 extern std::atomic<bool>        s_showModel;
-extern std::atomic<bool>        s_reloadModel;  // ImGui asks main thread to rebuild
+extern std::atomic<bool>        s_reloadModel;
 
 bool BuildModelView(const std::string& armor, std::string& src, std::string& note);
 void DumpCharCommand();
 void DumpModelCommand();
 
-// ---------------------------------------------------------------------------
-// Model highlighting (Highlight.cpp): recolor a spawn's actual 3D model via
-// the engine's per-actor material state. Driven from OnPulse; Lua setters
-// only record intent. See Highlight.cpp for why the vtable is called by hand.
-
 enum : uint32_t
 {
-	Highlight_Tint    = 0x1,   // multiply a color into every material
-	Highlight_Ambient = 0x2,   // add a constant ambient - reads as a glow
+	Highlight_Tint    = 0x1,
+	Highlight_Ambient = 0x2,
 };
 
 constexpr size_t kMaxHighlights = 256;
 
-void SetSpawnHighlight(int spawnId, uint32_t color, uint32_t mode);
+void SetSpawnHighlight(int spawnId, uint32_t color, uint32_t mode, const void* owner = nullptr);
 void ClearSpawnHighlight(int spawnId);
 void ClearAllHighlights();
+void ClearHighlightsOwnedBy(const void* owner);
 int  HighlightCount();
-void PulseHighlights();               // apply/reap - every pulse
-void RefreshHighlights();             // rewrite after material rebuilds - slow cadence
+void PulseHighlights();
+void RefreshHighlights();
 void OnHighlightSpawnRemoved(int spawnId);
-void ForgetHighlights();              // zoning: drop without restoring
+void ForgetHighlights();
 
-// id, color, mode, applied 
 std::vector<std::tuple<int, uint32_t, uint32_t, bool>> HighlightList();
 
-// ---------------------------------------------------------------------------
-// Unit frames (Units.cpp): a WoW-style secondary target ("focus") plus hover
-// healing - cast at whoever the mouse is over without giving up your target.
-//
-// The whole feature rests on one fact about the client, established by reading
-// CharacterZoneClient::CastSpell (eqgame 0x1400DD130): the outgoing cast packet
-// (opcode 0xead6) carries the target's spawn ID, snapshotted from the global
-// pTarget at the moment of the call -
-//
-//     if (pinstTarget == NULL) hdr.targetId = 0;
-//     else                     hdr.targetId = pinstTarget->SpawnID;
-//
-// - and nothing afterwards re-reads it. So a cast can be aimed at any spawn by
-// swapping pTarget, invoking the cast, and swapping straight back: the packet
-// is already on the wire by the time the call returns. No /target round trip,
-// no flicker, and the player keeps whatever they had selected.
+float FxClockNow();
+
+inline void UnpackArgb(uint32_t argb, float* rgba)
+{
+	const mq::MQColor color(argb);
+	rgba[0] = color.Red / 255.0f;
+	rgba[1] = color.Green / 255.0f;
+	rgba[2] = color.Blue / 255.0f;
+	rgba[3] = color.Alpha / 255.0f;
+}
+
+void InstallSelfCastHook();
+void RemoveSelfCastHook();
+void SpellFxNoteCastStart(int spellId, int spawnId, uint32_t castTimeMs);
+void SpellFxNoteLanded(int casterId, int targetId, int spellId, bool heal);
+void PulseSpellFx(std::vector<eqgfx::gpu::FxInstance>& out);
+void ForgetSpellFx();
+void LoadSpellFxSettings();
+void FlushSpellFxSettings();
+void OnSpellFxSpawnRemoved(int spawnId);
+bool SpellFxCommand(const char* szLine);
+void DrawSpellFxOptions();
+int  SpellFxLookCount();
+bool SpellFxEnabled();
+void SetSpellFxEnabled(bool on);
+void SpellFxPlay(int spellId, int casterId, int targetId, uint32_t castMs);
+std::string SpellFxDescribe(int spellId);
+const char* SpellFxLookName(int index);
+void SpellFxPlayLook(int index, int casterId, int targetId, float delay);
+int SpellFxLineCount();
+const char* SpellFxLineClass(int index);
+const char* SpellFxLineName(int index);
+void SpellFxPlayLine(int index, int casterId, int targetId, float delay);
+int  SpellFxDemoLevel();
+void SetSpellFxDemoLevel(int level);
+void SpellFxDemoForm(uint32_t form, int casterId, int targetId);
+void SpellFxDemoGlyphs(int spawnId);
+uint32_t SpellFxActiveCount();
+bool SelfCastHookInstalled();
+
+bool ProjectToScreen(float x, float y, float z, float& sx, float& sy);
+
+void AttackFxNoteHit(int attackerId, int targetId, int damage, uint32_t flags);
+void BuildAttackFx(std::vector<eqgfx::gpu::FxInstance>& out);
+void DrawAttackOverlay();
+void DrawAttackHealthBar(struct ImDrawList* dl, float x0, float y0, float x1, float y1, float rounding);
+void DrawAttackOptions();
+void LoadAttackSettings();
+void FlushAttackSettings();
+
+void BuildTargetRing(std::vector<eqgfx::gpu::FxInstance>& out);
+void DrawTargetRingOptions();
+void LoadTargetRingSettings();
+void FlushTargetRingSettings();
+
+void DrawDebugWindow();
+void ShowDebugWindow(bool on);
+bool DebugWindowShown();
+
+void LoadGfxSettings();
+void PulseGfxSettings();
+void FlushGfxSettings();
+
+struct FxStats { uint32_t instances, segments; bool ready; const char* error; };
+FxStats GetFxStats();
+
+void InstallNametagBatch();
+void RemoveNametagBatch();
+void ReleaseNametagBatchDevice();
+void ForgetNametagBatch();
+bool NametagBatchCommand(const char* szLine);
+bool UiTextBatchCommand(const char* szLine);
+bool NametagBatchEnabled();
+void SetNametagBatchEnabled(bool on);
+void SetUiTextBatchEnabled(bool on);
+void ResetTextBatchCaches();
+
+struct TextBatchStats
+{
+	bool        resolved = false;
+	const char* failReason = "";
+	bool        nametagsInstalled = false, uiInstalled = false, sortInstalled = false;
+	bool        nametagsOn = false, uiOn = false;
+	uint32_t    tags = 0, tagDraws = 0, tagRebuilds = 0;
+	uint32_t    uiMerged = 0, uiDrawsSaved = 0, uiCached = 0, uiMergesPlanned = 0;
+};
+TextBatchStats GetTextBatchStats();
+
+void SampleEqDrawCounter();
+uint32_t EqDrawsLastPulse();
+
+struct AnimationLodOptions
+{
+	bool  enabled = false;
+	float distance = 100.0f;
+	int   maxInterval = 4;
+};
+
+void InstallAnimationLod();
+void RemoveAnimationLod();
+void PulseAnimationLod();
+bool AnimationLodInstalled();
+bool AnimationLodCommand(const char* szLine);
+AnimationLodOptions GetAnimationLodOptions();
+void SetAnimationLodOptions(const AnimationLodOptions& o);
+
+void InstallParticleGpu();
+void RemoveParticleGpu();
+void ReleaseParticleGpuDevice();
+void DrawParticleGpu();
+bool ParticleGpuInstalled();
+bool ParticleGpuEnabled();
+void SetParticleGpuEnabled(bool on);
+const char* ParticleGpuFailReason();
+constexpr int kDefaultParticleBudget = 65536;
+constexpr int kMinParticleBudget = 4096;
+constexpr int kMaxParticleBudget = 1048576;
+void TrimParticleGpu();
+int GetParticleGpuBudget();
+void SetParticleGpuBudget(int particles);
+size_t ParticleGpuBufferBytes();
+bool ParticleGpuCommand(const char* szLine);
+
+struct ParticleGpuStats
+{
+	uint32_t    particles = 0, emitters = 0, draws = 0, gatedFrames = 0;
+	const char* ungatedReason = "";
+};
+
+void NoteParticleGpuFrame(bool gated, const char* ungatedReason);
+void NoteParticleGpuDraw(uint32_t particles, uint32_t emitters, uint32_t draws);
+void SampleParticleGpuStats();
+ParticleGpuStats GetParticleGpuStats();
+
+struct ActorAnimationStats
+{
+	uint32_t animated = 0, distant = 0, skipped = 0;
+};
+
+void NoteActorAnimation(bool distant, bool skipped);
+void SampleActorAnimationStats();
+ActorAnimationStats GetActorAnimationStats();
+
+struct AlwaysOnStyle
+{
+	float opacity   = 0.85f;
+	float motion    = 1.0f;
+	float fadeAfter = 30.0f;
+	float fadeTo    = 0.35f;
+	bool  breathe   = false;
+
+	bool operator==(const AlwaysOnStyle&) const = default;
+};
+
+float AlwaysOnFade(const AlwaysOnStyle& style, float shownFor, float phase);
+
+bool AlwaysOnStyleOptions(AlwaysOnStyle& style);
+
+struct GfxOptions
+{
+	bool  classFx;
+	bool  classFxPCs;
+	bool  classFxNPCs;
+	float classFxRadius;
+	int   classFxMaxSpawns;
+	int   classFxSlotMask;
+	AlwaysOnStyle classFxStyle;
+	bool  testRing;
+	bool  gpuEffects;
+	bool  damageDebug;
+};
+
+GfxOptions GetGfxOptions();
+void       SetGfxOptions(const GfxOptions& opts);
+
+struct UnitOptions
+{
+	bool worldHover;
+	bool focusMarker;
+	bool hoverFallback;
+	bool buffProbe;
+};
+
+UnitOptions GetUnitOptions();
+void        SetUnitOptions(const UnitOptions& opts);
+
+bool BuffProbeAvailable();
 
 struct UnitCast
 {
 	int      spellId;
-	uint32_t startMs;      // EQGetTime() when the cast started
-	uint32_t castMs;       // total cast time reported by the client
+	uint32_t startMs;
+	uint32_t castMs;
 };
 
 void InitUnits();
 void ShutdownUnits();
-void PulseUnits();                       // expire cast bars, deferred retarget
-void DrawUnitsUI();                      // render thread, from OnUpdateImGui
+void PulseUnits();
+void DrawUnitsUI();
 void OnUnitSpawnRemoved(int spawnId);
 
-/// Fed from the cast tap in Spells.cpp so the focus/hover cast bars start the
-/// instant the packet lands rather than a pulse later.
 void UnitsNoteCastStart(int spellId, int spawnId, uint32_t castTimeMs);
 
-/// World markers for the focus target, appended by PulseClassFx before it
-/// publishes. Keeping the submit vector owned in one place avoids a second
-/// producer racing the swap.
+void UnitsWantBuffs(int spawnId);
+
 void BuildUnitMarkers(std::vector<eqgfx::gpu::FxInstance>& out);
 
-/// Handles the /eqgfx sub-commands this file owns. Returns false if szCmd
-/// isn't one of ours, so the main dispatcher can carry on.
 bool UnitsCommand(const char* szCmd, const char* szLine);
 
 int  GetSecondaryTarget();
@@ -204,13 +347,8 @@ int  GetHoverUnit();
 void SetHoverUnit(int spawnId);
 bool GetSpawnCast(int spawnId, UnitCast& out);
 
-/// Cast memorised gem `gem` (1-based) at `spawnId`. See the note above for why
-/// this does not disturb the player's target.
 bool CastAtSpawn(int spawnId, int gem);
 
-/// hover -> focus -> target, the WoW mouseover-macro fallback chain.
 int  ResolveCastUnit();
 
-/// /attarget <unit> <command> - run any target-consuming command against a
-/// chosen unit. The binding is deliberately the player's to create.
 void AtTargetCommand(PlayerClient* pChar, const char* szLine);

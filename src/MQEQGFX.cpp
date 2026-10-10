@@ -1,58 +1,32 @@
-/*
- * MQEQGFX - MacroQuest plugin exposing the EQ graphics engine to Lua.
- *
- *
- * Lua interface: MQ2Lua resolves require('plugin.MQEQGFX') through our
- * exported CreateLuaModule (one sol table per Lua state, all wrapping the
- * shared native scene below). The eqgfx package's init.lua shim keeps
- * require('eqgfx') working unchanged for the feature scripts, and MQ2Lua
- * auto-terminates dependent scripts when this plugin unloads.
- *
- * HOW WE RENDER (DX11 client)
- * ---------------------------
- * World primitives are
- * projected to screen space through the engine's own camera
- * (CCamera::ProjectWorldCoordinatesToScreen) and drawn as 2D segments from
- * MacroQuest's GraphicsSceneRender callback - the sanctioned render hook.
- *
- * Segments that cross the camera's near plane are clipped rather than
- * dropped, so shapes drawn around the player stay whole (see SegKind below).
- * Nothing here depth-tests against the world.
- *
- * This file owns the plugin lifecycle, the retained scene + render callback,
- * the 3D portraits, the /eqgfx command, and the Lua module. The event taps
- * live in their own files: CombatNumbers.cpp (damage/heal), Spells.cpp
- * (cast-start + CastingData tracker), Models.cpp (toy with EQ models WIP),
- * Highlight.cpp (recoloring spawn models).
- * Shared state is declared in MQEQGFX.h.
- */
-
 #include <mq/Plugin.h>
 
 #include "MQEQGFX.h"
+#include "SettingsFile.h"
 
 #include "eqlib/graphics/CameraInterface.h"
-#include "eqlib/graphics/Render.h"
-#include "eqlib/graphics/GraphicsEngine.h"
 #include "eqlib/graphics/SceneGraphInterface.h"
-#include "eqlib/graphics/ResourceManagerInterface.h"
 #include "eqlib/graphics/Actors.h"
 
 #include "gpu/LineFX.h"
 #include "gpu/FxCatalog.h"
 #include "gpu/FxCamera.h"
-
-#include "eqlib/game/ClassInfo.h"
+#include "gpu/Glyphs.h"
+#include "unitframes/UnitFrames.h"
+#include "ui/NativeUi.h"
 
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 PreSetup("MQEQGFX");
@@ -62,22 +36,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
-// ---------------------------------------------------------------------------
-// Retained scene: Lua pushes primitives, the render callback draws them every
-// frame until the next clear(). World coordinates are MQ/TLO (X, Y, Z), swapped
-// to the engine's (Y, X, Z) at projection time.
-
-// How a segment reaches the screen:
-//   Seg_World   projected through the camera here, drawn as a thick 2D line.
-//               Segments that cross the near plane are clipped, not dropped.
-//   Seg_Screen  already pixels, drawn as-is.
-//
-// There is deliberately no "let the engine project it" kind. CRender's
-// DrawLine3D (vtable 0x120) runs its endpoints through TransformWorldToCamera
-// and appends the result to the same primitive buffer DrawLine2D feeds - but
-// that buffer is rasterized as pre-transformed screen-space vertices, so
-// camera-space coordinates land in a degenerate smear near the origin. It
-// cannot draw anything useful on this client; don't reach for it.
 enum SegKind : uint8_t
 {
 	Seg_World = 0,
@@ -98,23 +56,6 @@ struct ScreenRect
 	uint32_t color;
 };
  
-// DOUBLE BUFFERED, and it has to be.
-//
-// Lua builds a frame with a clear() followed by a run of add_* calls, while
-// the render thread draws whenever the engine says so. With one shared buffer
-// the render thread lands in the middle of a rebuild - after the clear, part
-// way through the adds - and draws a half-built scene. Every frame. That
-// reads as flicker and tearing, and no amount of care in the script can fix
-// it, because the script does not control when the render callback fires.
-//
-// So: Lua writes s_back, the render thread reads s_front, and they are
-// swapped in one locked step at a frame boundary. The render thread therefore
-// only ever sees a scene somebody finished building.
-//
-// Threading: s_back is touched only from the main thread (MQ2Lua and the
-// /eqgfx command both run there), so it needs no lock. s_front is shared, and
-// the mutex now guards exactly two things - the swap and the draw - instead
-// of being taken and released once per line.
 struct SceneFrame
 {
 	std::vector<Segment>    segments;
@@ -124,50 +65,78 @@ struct SceneFrame
 	bool empty() const { return segments.empty() && rects.empty(); }
 };
 
-std::mutex s_sceneMutex;        // guards s_front only
-SceneFrame s_front;             // guarded - what the render thread draws
-SceneFrame s_back;              // main thread only - what Lua is building
+std::mutex s_sceneMutex;
+SceneFrame s_front;
+SceneFrame s_back;
 
-// Publish the built frame and start a new one. Called by clear() (every
-// animated script's loop is clear -> add -> repeat, so that is the natural
-// frame boundary) and by present().
 void PresentScene(bool startNewFrame)
 {
 	{
 		std::scoped_lock lock(s_sceneMutex);
 		std::swap(s_front, s_back);
 	}
-	// s_back now holds the previous front buffer. Reusing it keeps its
-	// capacity, so a steady scene stops allocating after the first few frames.
 	if (startNewFrame)
 		s_back.clear();
 }
-int                     s_thickness = 3;       // line half-width in pixels
+
+constexpr int kMaxArcSegments = 128;
+
+bool SceneFull()
+{
+	return s_back.segments.size() + s_back.rects.size() >= eqgfx::gpu::kMaxInstances;
+}
+
+int                     s_thickness = 3;
 std::atomic<uint32_t>   s_sceneCalls{ 0 };
 std::atomic<uint32_t>   s_lastDraws{ 0 };
-
-// ---------------------------------------------------------------------------
-// Native UI window sweep (plate occlusion). Runs on the render thread and
-// caches the rects; Lua's get_ui_rects() just snapshots them.
 
 struct UiRect
 {
 	float x0, y0, x1, y1;
-	int nameIdx;                                // 0-based index into s_uiNames
+	int nameIdx;
 };
 
 constexpr int kMaxUiRects = 128;
+constexpr size_t kMaxWindowNameLen = 200;
 
 std::mutex               s_uiMutex;
 std::vector<std::string> s_uiNames;
+
+struct UiNameList
+{
+	std::vector<std::string> names;
+	std::vector<int>         fromUnion;
+};
+std::unordered_map<const void*, UiNameList> s_uiNameLists;
 std::vector<UiRect>      s_uiRects;
 int                      s_uiStatNames = 0;
 int                      s_uiStatFound = 0;
+std::atomic<bool>        s_uiRectsWanted{ false };
 
-// ---------------------------------------------------------------------------
-// 3D portraits via the engine's ObjectPreview API: bind an actor to a slot,
-// the engine renders it offscreen, blit the result into a UI rect. Two
-// hardware slots (self + target). (Not working yet.)
+void RebuildUiNames()
+{
+	std::unordered_map<std::string, int> index;
+	s_uiNames.clear();
+	for (const auto& [listOwner, list] : s_uiNameLists)
+	{
+		for (const std::string& name : list.names)
+		{
+			if (index.emplace(name, static_cast<int>(s_uiNames.size())).second)
+				s_uiNames.push_back(name);
+		}
+	}
+	for (auto& [listOwner, list] : s_uiNameLists)
+	{
+		list.fromUnion.assign(s_uiNames.size(), -1);
+		for (int i = 0; i < static_cast<int>(list.names.size()); ++i)
+		{
+			int& slot = list.fromUnion[index[list.names[i]]];
+			if (slot < 0)
+				slot = i;
+		}
+	}
+	s_uiRects.clear();
+}
 
 enum { kPortraitSlots = 2 };
 enum PortraitSubject { PS_NONE = 0, PS_SELF = 1, PS_TARGET = 2 };
@@ -176,75 +145,52 @@ struct PortraitConfig
 {
 	bool        enabled = false;
 	int         subject = PS_SELF;
-	std::string window;                          // e.g. "TargetWindow"; empty = explicit rect
-	int         x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // explicit pixel rect (used when window empty)
+	std::string window;
+	int         x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 	uint32_t    color = 0xFFFFFFFF;
 };
 
-std::mutex     s_portraitMutex;                  // guards s_portraits (config)
+std::mutex     s_portraitMutex;
 PortraitConfig s_portraits[kPortraitSlots];
 
-// Per-slot engine/actor state. Touched ONLY on the render thread (OnSceneRender)
-// and in ShutdownPlugin after the render callback is removed, so it needs no lock.
 struct PortraitEngineState
 {
-	bool             enabled = false;      // EnableObjectPreview(slot) state
-	CActorInterface* actor = nullptr;      // plugin-owned standalone actor (DestroyActor to free)
-	std::string      tag;                  // ActorDef tag the actor was built from
-	void*            boundActor = nullptr; // last actor handed to SetObjectPreviewActor
+	bool             enabled = false;
+	CActorInterface* actor = nullptr;
+	std::string      tag;
+	void*            boundActor = nullptr;
 };
 PortraitEngineState s_portraitEngine[kPortraitSlots];
 
-// ---------------------------------------------------------------------------
-// GPU effect path. The CPU writes one record per effect and the vertex shader
-// generates all of its geometry, which is what makes hundreds of animated
-// spawns affordable. World segments coming from Lua ride the same buffer as
-// FxForm_Segment instances, so custom scripts get the GPU path for free and
-// keep working unchanged.
-//
-// Render thread only, except s_fxSubmit which producers fill under s_fxMutex.
-
 eqgfx::gpu::LineFX                    s_lineFX;
 std::mutex                            s_fxMutex;
-std::vector<eqgfx::gpu::FxInstance>   s_fxSubmit;   // guarded - filled by Lua/OnPulse
-std::vector<eqgfx::gpu::FxInstance>   s_fxDraw;     // render thread scratch
+std::vector<eqgfx::gpu::FxInstance>   s_fxSubmit;
+std::vector<eqgfx::gpu::FxInstance>   s_fxLua;
+std::vector<eqgfx::gpu::FxInstance>   s_fxDraw;
 std::atomic<bool>                     s_fxEnabled{ true };
 std::atomic<uint32_t>                 s_fxLastInstances{ 0 };
 std::atomic<uint32_t>                 s_fxLastSegments{ 0 };
 double                                s_fxStartTime = 0.0;
 
-// Per-spawn driver for the compiled catalogue. This is what actually puts the
-// shipped animations on screen: walk the spawn list, look each spawn's class up
-// in FxCatalog, and submit one instance per enabled slot. Runs on OnPulse (main
-// thread) because the spawn list is only safe there; the render thread just
-// consumes whatever was last submitted.
 struct FxDriverCfg
 {
-	bool  enabled     = true;
+	bool  enabled     = false;
 	bool  includePCs  = true;
 	bool  npcs        = true;
 	float radius      = 200.0f;
 	int   maxSpawns   = 60;
-	int   slotMask    = 0x1;   // bit N = show catalogue slot N (bit 0 = signature)
-	float alpha       = 1.0f;
+	int   slotMask    = 0x1;
+	AlwaysOnStyle style;
 };
 FxDriverCfg s_fxDriver;
 std::atomic<uint32_t> s_fxDriverSpawns{ 0 };
 
-// Debug: a big unmissable ring at your feet. Proves the whole pipeline -
-// device, shader, matrix, blend, depth - without needing any other spawn.
 std::atomic<bool> s_fxTest{ false };
 
 int         s_renderCallbackId = -1;
 bool        s_active = false;
-std::string s_lastArmor;                         // last showmodel arg (main thread only)
+std::string s_lastArmor;
 
-// ---------------------------------------------------------------------------
-// Engine access
-
-// World -> screen through the engine's own camera. Callers pass MQ/TLO order
-// (x=X, y=Y); the engine's CVector3 is (Y, X, Z), matching /loc YXZ - swap
-// the first two before projecting. Returns false when behind the camera.
 bool WorldToScreen(float x, float y, float z, float& sx, float& sy)
 {
 	CDisplay* display = pDisplay.get();
@@ -262,9 +208,15 @@ void GetScreenSize(int& width, int& height)
 	height = render ? render->GetDisplayHeight() : 0;
 }
 
-// Render-thread sweep of the candidate window list.
 void UiSweep()
 {
+	if (!s_uiRectsWanted.exchange(false, std::memory_order_relaxed))
+		return;
+
+	int width = 0, height = 0;
+	GetScreenSize(width, height);
+	const float sw = static_cast<float>(width), sh = static_cast<float>(height);
+
 	std::scoped_lock lock(s_uiMutex);
 	if (s_uiNames.empty())
 		return;
@@ -281,20 +233,55 @@ void UiSweep()
 		if (!wnd || !wnd->IsReallyVisible() || wnd->IsMinimized())
 			continue;
 
-		CXRect rect = wnd->GetScreenRect();
-		if (rect.right <= rect.left || rect.bottom <= rect.top)
+		const CXRect rect = wnd->GetScreenRect();
+		float x0 = static_cast<float>(rect.left), y0 = static_cast<float>(rect.top);
+		float x1 = static_cast<float>(rect.right), y1 = static_cast<float>(rect.bottom);
+		if (sw > 0.0f && sh > 0.0f)
+		{
+			x0 = std::max(x0, 0.0f);
+			y0 = std::max(y0, 0.0f);
+			x1 = std::min(x1, sw);
+			y1 = std::min(y1, sh);
+			if ((x1 - x0) * (y1 - y0) >= sw * sh * 0.9f)
+				continue;
+		}
+		if (x1 <= x0 || y1 <= y0)
 			continue;
 
-		s_uiRects.push_back({ static_cast<float>(rect.left), static_cast<float>(rect.top),
-			static_cast<float>(rect.right), static_cast<float>(rect.bottom), idx });
+		s_uiRects.push_back({ x0, y0, x1, y1, idx });
 	}
 
 	s_uiStatNames = static_cast<int>(s_uiNames.size());
 	s_uiStatFound = static_cast<int>(s_uiRects.size());
 }
 
-// Release a slot's plugin-owned standalone actor: unbind it from the preview,
-// then destroy it via the scene graph. Render thread only.
+void SubtractRect(std::vector<std::array<float, 4>>& pieces, const UiRect& w, size_t cap)
+{
+	std::vector<std::array<float, 4>> next;
+	for (const std::array<float, 4>& r : pieces)
+	{
+		if (w.x0 >= r[2] || w.x1 <= r[0] || w.y0 >= r[3] || w.y1 <= r[1])
+		{
+			next.push_back(r);
+			continue;
+		}
+		const float iy0 = std::max(r[1], w.y0), iy1 = std::min(r[3], w.y1);
+		if (r[1] < iy0) next.push_back({ r[0], r[1], r[2], iy0 });
+		if (iy1 < r[3]) next.push_back({ r[0], iy1, r[2], r[3] });
+		const float ix0 = std::max(r[0], w.x0), ix1 = std::min(r[2], w.x1);
+		if (r[0] < ix0) next.push_back({ r[0], iy0, ix0, iy1 });
+		if (ix1 < r[2]) next.push_back({ ix1, iy0, r[2], iy1 });
+	}
+	if (next.size() > cap)
+	{
+		std::sort(next.begin(), next.end(), [](const std::array<float, 4>& a, const std::array<float, 4>& b) {
+			return (a[2] - a[0]) * (a[3] - a[1]) > (b[2] - b[0]) * (b[3] - b[1]);
+		});
+		next.resize(cap);
+	}
+	pieces = std::move(next);
+}
+
 void ReleasePreviewActor(int slot, CRenderInterface* render, SGraphicsEngine* eng)
 {
 	PortraitEngineState& es = s_portraitEngine[slot];
@@ -325,28 +312,23 @@ CActorInterface* AcquirePreviewActor(const PortraitConfig& cfg, int slot,
 	if (!subject)
 		return nullptr;
 
-	const char* tag = subject->mActorClient.ActorDef;   // resolved model tag, e.g. "HUM_ACTORDEF"
+	const char* tag = subject->mActorClient.ActorDef;
 	if (!tag || !tag[0])
 		return nullptr;
 
 	PortraitEngineState& es = s_portraitEngine[slot];
 	if (es.actor && es.tag == tag)
-		return es.actor;                                // already built for this appearance
+		return es.actor;
 
-	// Subject/appearance changed -> tear down the old actor and rebuild.
 	ReleasePreviewActor(slot, render, eng);
 
 	CActorDefinitionInterface* def = nullptr;
 	if (eng->pResourceManager->GetActorDefinition(tag, &def) != eStatusSuccess || def == nullptr)
 		return nullptr;
 
-	// Create at the local player's (valid) position so creation succeeds; we hide
-	// it immediately and the preview renders it by pointer regardless of where it
-	// nominally stands.
 	CVector3 pos(0.0f, 0.0f, 0.0f), orient(0.0f, 0.0f, 0.0f);
 	if (PlayerClient* me = pLocalPlayer.get())
 		pos = CVector3(me->X, me->Y, me->Z);
-
 
 	CActorInterface* actor = nullptr;
 	CCollisionGroup grp(CCollisionGroup::eStatic);
@@ -355,12 +337,10 @@ CActorInterface* AcquirePreviewActor(const PortraitConfig& cfg, int slot,
 	if (actor == nullptr)
 		return nullptr;
 
-
 	es.actor = actor;
 	es.tag = tag;
 	return actor;
 }
-
 
 void DrawPortraits(CRender* render)
 {
@@ -380,7 +360,6 @@ void DrawPortraits(CRender* render)
 
 		PortraitEngineState& es = s_portraitEngine[slot];
 
-		// Nothing valid to show -> disable the slot (frees its RT) + drop the actor.
 		if (actor == nullptr)
 		{
 			if (es.enabled)
@@ -394,16 +373,14 @@ void DrawPortraits(CRender* render)
 
 		if (!es.enabled)
 		{
-			render->EnableObjectPreview(true, slot);      // lazily allocates the RT
-			// The preview stays black until the per-slot camera exists;
-			// EnableObjectPreview doesn't create it, so create it here (idempotent).
+			render->EnableObjectPreview(true, slot);
 			if (eng && eng->pSceneGraph)
 			{
 				CCameraInterface* cam = nullptr;
 				eng->pSceneGraph->CreateObjectPreviewCamera(&cam, static_cast<EObjectPreviewMode>(slot));
 			}
 			es.enabled = true;
-			es.boundActor = nullptr;                      // force a re-bind below
+			es.boundActor = nullptr;
 		}
 		if (es.boundActor != actor)
 		{
@@ -411,8 +388,6 @@ void DrawPortraits(CRender* render)
 			es.boundActor = actor;
 		}
 
-		// Destination rect: a tracked window's screen rect, or an explicit pixel
-		// rect (the Lua ImGui overlay passes its content rect here).
 		CXRect rect;
 		bool haveRect = false;
 		if (!cfg.window.empty())
@@ -439,6 +414,25 @@ void DrawPortraits(CRender* render)
 
 void RenderGpuEffects();
 
+} // namespace
+
+static double SteadySeconds()
+{
+	return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static double FxClockSeconds()
+{
+	return SteadySeconds() - s_fxStartTime;
+}
+
+float FxClockNow()
+{
+	return static_cast<float>(FxClockSeconds());
+}
+
+namespace {
+
 void OnSceneRender()
 {
 	s_sceneCalls.fetch_add(1, std::memory_order_relaxed);
@@ -446,18 +440,13 @@ void OnSceneRender()
 	if (GetGameState() != GAMESTATE_INGAME)
 		return;
 
+	DrawParticleGpu();
 	UiSweep();
 
 	CRender* render = g_pDrawHandler.get();
 	CDisplay* display = pDisplay.get();
 	if (!render || !display || !display->pCamera)
 		return;
-
-	// Nothing is drawn through the engine any more: every primitive - world
-	// lines, screen lines and filled rects alike - is generated on the GPU in
-	// RenderGpuEffects below. The old path projected each segment on the CPU and
-	// issued 2N+1 DrawLine2D calls per line, and filled a rect with one
-	// DrawLine2D per pixel row, which is what made this too slow to use.
 
 	DrawPortraits(render);
 
@@ -467,10 +456,6 @@ void OnSceneRender()
 		std::memory_order_relaxed);
 }
 
-// GPU pass. Runs from the same callback, which MQ drives off its detour on
-// CParticleSystem::Render - that lands after RenderScenePasses, so the depth
-// buffer holds the world and our effects occlude against it properly. MQ wraps
-// this callback in a full DX11 ScopedStateBlock, so we set state freely.
 void RenderGpuEffects()
 {
 	if (!s_fxEnabled.load(std::memory_order_relaxed))
@@ -484,23 +469,21 @@ void RenderGpuEffects()
 	if (!eqgfx::gpu::BuildViewProj(viewProj, camPos, camRight, camUp))
 		return;
 
-	// Snapshot the submit list; producers keep filling the other one.
 	{
 		std::scoped_lock lock(s_fxMutex);
+		const float now = FxClockNow();
+		std::erase_if(s_fxLua, [now](const eqgfx::gpu::FxInstance& ix) {
+			return ix.life > 0.0f && !(ix.flags & eqgfx::gpu::FxFlag_NoEnvelope) && now > ix.birth + ix.life;
+		});
 		s_fxDraw = s_fxSubmit;
+		const size_t room = eqgfx::gpu::kMaxInstances - std::min(s_fxDraw.size(), size_t(eqgfx::gpu::kMaxInstances));
+		s_fxDraw.insert(s_fxDraw.end(), s_fxLua.begin(),
+			s_fxLua.begin() + static_cast<ptrdiff_t>(std::min(room, s_fxLua.size())));
 	}
 
-	// World segments from the retained scene join the same draw as
-	// FxForm_Segment, so the Lua API is GPU-accelerated without changing.
 	{
 		std::scoped_lock lock(s_sceneMutex);
 
-		auto unpack = [](uint32_t c, float* rgba) {
-			rgba[0] = ((c >> 16) & 0xFF) / 255.0f;
-			rgba[1] = ((c >> 8) & 0xFF) / 255.0f;
-			rgba[2] = (c & 0xFF) / 255.0f;
-			rgba[3] = ((c >> 24) & 0xFF) / 255.0f;
-		};
 		const float halfWidth = static_cast<float>(std::max(1, s_thickness)) * 0.5f;
 
 		for (const Segment& seg : s_front.segments)
@@ -513,11 +496,10 @@ void RenderGpuEffects()
 			ix.segments = 1;
 			ix.speed = 1.0f;
 			ix.width = halfWidth;
-			unpack(seg.color, ix.rgba);
+			UnpackArgb(seg.color, ix.rgba);
 
 			if (seg.kind == Seg_Screen)
 			{
-				// Pixels straight to clip - no projection, always on top.
 				ix.pos[0] = seg.x1; ix.pos[1] = seg.y1;
 				ix.pos2[0] = seg.x2; ix.pos2[1] = seg.y2;
 				ix.flags = eqgfx::gpu::FxFlag_ScreenSpace;
@@ -531,8 +513,6 @@ void RenderGpuEffects()
 			s_fxDraw.push_back(ix);
 		}
 
-		// Filled rects are one quad each now. The old path drew a horizontal
-		// DrawLine2D per pixel row, so a 200px bar cost 200 engine calls.
 		for (const ScreenRect& rect : s_front.rects)
 		{
 			if (s_fxDraw.size() >= eqgfx::gpu::kMaxInstances)
@@ -544,7 +524,7 @@ void RenderGpuEffects()
 			ix.pos[0] = rect.x0;  ix.pos[1] = rect.y0;
 			ix.pos2[0] = rect.x1; ix.pos2[1] = rect.y1;
 			ix.flags = eqgfx::gpu::FxFlag_ScreenSpace;
-			unpack(rect.color, ix.rgba);
+			UnpackArgb(rect.color, ix.rgba);
 			s_fxDraw.push_back(ix);
 		}
 	}
@@ -559,8 +539,7 @@ void RenderGpuEffects()
 	int width = 0, height = 0;
 	GetScreenSize(width, height);
 
-	const float t = static_cast<float>(
-		(double)::GetTickCount64() / 1000.0 - s_fxStartTime);
+	const double t = FxClockSeconds();
 
 	s_lineFX.Render(s_fxDraw.data(), s_fxDraw.size(), viewProj, camPos,
 		camRight, camUp, t,
@@ -570,11 +549,63 @@ void RenderGpuEffects()
 	s_fxLastSegments.store(s_lineFX.LastSegmentCount(), std::memory_order_relaxed);
 }
 
-// Lua passes colors as the (possibly negative) int32 that LuaJIT bit.bor
-// produces; normalize to the packed uint32 the engine wants.
 uint32_t ToColor(int64_t color)
 {
 	return static_cast<uint32_t>(color & 0xFFFFFFFF);
+}
+
+uint32_t Channel(int64_t value)
+{
+	return static_cast<uint32_t>(std::clamp<int64_t>(value, 0, 255));
+}
+
+void PrintEqgfxHelp()
+{
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- unit frames ---\ax");
+	eqgfx::unitframes::PrintHelp();
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- targeting and casting ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/attarget <unit> <command>\ax - run any target-consuming command "
+		"at 2Tar | Group1-6 | Raid1-72 | XTar1-20 | MouseHover | Me | Target | <id> | <name>");
+	WriteChatf("\ag[MQEQGFX]\ax   e.g. \ay/attarget MouseHover /cast 3\ax - your own target never changes");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx focus [clear|target|marker|window|<name>]\ax - the secondary target");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx frames [on|off|raid|worldhover|fallback]\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx xtarget [on|off]\ax, \ay/eqgfx units\ax - status");
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- spell animations ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx spells [on|off|self|group|all|radius <n>|persist off|self|group|list|why <spell>|test <spell>]\ax"
+		" - %d native looks picked from what each spell does", SpellFxLookCount());
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- performance ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx nametags [on|off]\ax - draw every nametag in one batch"
+		" (status shows the client's draw count per frame)");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx uitext [on|off]\ax - draw runs of adjacent UI strings together");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx animlod [on|off|distance <n>|interval <n>]\ax"
+		" - animate far actors less often");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx particles [on|off|budget <n>]\ax - EQ's spell and zone particles drawn on the gpu");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx debug\ax - test panel: feature toggles, stats, spell looks, forms and glyphs");
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- native ui ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx ui [list|all on|off|native|<window> [on|off]]\ax"
+		" - draw a stock window ourselves; it keeps working as the game's own");
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- world effects ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx fx [on|off|test|list|slots <mask>|radius <n>|max <n>|pcs|npcs]\ax"
+		" - the per-class passive animations, \aroff\ax unless you turn them on");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx highlight [clear|off|<0xAARRGGBB>] [tint|ambient|both]\ax"
+		" - recolour your target's model");
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- models and capture ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx showmodel [<armor>|off]\ax, \ay/eqgfx portrait self|target [on|off]\ax \ao(in development)\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx dumpchar\ax, \ay/eqgfx dumpmodel\ax - what the client says you are wearing");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx capture [off|save|clear|status]\ax - record the appearance calls");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx dmgdebug [on|off]\ax - log raw damage events");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx\ax alone prints build, render and gpu status");
+
+	WriteChatf("\ag[MQEQGFX]\ax \ag--- lua ---\ax");
+	WriteChatf("\ag[MQEQGFX]\ax \ay/lua run eqgfx/nameplates\ax (\ay/npmenu\ax), "
+		"\ay/lua run eqgfx/indicators\ax (\ay/aemenu\ax), \ay/lua run eqgfx/dmgnums\ax (\ay/dnmenu\ax), "
+		"\ay/lua run eqgfx/highlight\ax");
 }
 
 void EqgfxCommand(PlayerClient*, const char* szLine)
@@ -582,13 +613,61 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 	char szCmd[MAX_STRING] = { 0 };
 	GetArg(szCmd, szLine, 1);
 
-	// focus / hovercast / focuscast / frames / units live in Units.cpp.
+	if (ci_equals(szCmd, "help") || ci_equals(szCmd, "?"))
+	{
+		PrintEqgfxHelp();
+		return;
+	}
+
+	if (ci_equals(szCmd, "debug"))
+	{
+		char szState[MAX_STRING] = { 0 };
+		GetArg(szState, szLine, 2);
+		ShowDebugWindow(ci_equals(szState, "off") ? false : ci_equals(szState, "on") ? true : !DebugWindowShown());
+		return;
+	}
+
+	if (ci_equals(szCmd, "uitext"))
+	{
+		UiTextBatchCommand(szLine);
+		return;
+	}
+
+	if (ci_equals(szCmd, "ui"))
+	{
+		eqgfx::ui::NativeUiCommand(szLine);
+		return;
+	}
+
+	if (ci_equals(szCmd, "particles"))
+	{
+		ParticleGpuCommand(szLine);
+		return;
+	}
+
+	if (ci_equals(szCmd, "animlod"))
+	{
+		AnimationLodCommand(szLine);
+		return;
+	}
+
+	if (ci_equals(szCmd, "nametags") || ci_equals(szCmd, "perf"))
+	{
+		NametagBatchCommand(szLine);
+		return;
+	}
+
+	if (ci_equals(szCmd, "spells") || ci_equals(szCmd, "spellfx"))
+	{
+		SpellFxCommand(szLine);
+		return;
+	}
+
 	if (UnitsCommand(szCmd, szLine))
 		return;
 
 	if (ci_equals(szCmd, "capture"))
 	{
-		// Recording is always on; this toggles verbose logging.
 		char szState[MAX_STRING] = { 0 };
 		GetArg(szState, szLine, 2);
 		if (ci_equals(szState, "off")) { s_captureVerbose = false; WriteChatf("\ag[MQEQGFX]\ax capture logging OFF (still recording)"); }
@@ -609,8 +688,6 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 		else { InstallSwapCapture(); s_captureVerbose = true; WriteChatf("\ag[MQEQGFX]\ax capture logging \agON\ax (zone/re-equip to see calls). /eqgfx capture off to quiet."); }
 		return;
 	}
-	// /eqgfx highlight [off|<0xAARRGGBB>] [tint|ambient|both] - target-based
-	// smoke test for the model tint path. Scripts use eqgfx.highlight().
 	if (ci_equals(szCmd, "highlight"))
 	{
 		char szArg[MAX_STRING] = { 0 };
@@ -637,12 +714,24 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 			return;
 		}
 
-		uint32_t color = 0xFFFF3030;                 // default: red
-		if (szArg[0])
-			color = static_cast<uint32_t>(strtoull(szArg, nullptr, 0));
-
 		char szMode[MAX_STRING] = { 0 };
 		GetArg(szMode, szLine, 3);
+
+		uint32_t color = 0xFFFF3030;
+		if (ci_equals(szArg, "tint") || ci_equals(szArg, "ambient") || ci_equals(szArg, "both"))
+			strcpy_s(szMode, szArg);
+		else if (szArg[0])
+		{
+			char* end = nullptr;
+			const long long value = strtoll(szArg, &end, 0);
+			if (*end || value < INT32_MIN || value > UINT32_MAX)
+			{
+				WriteChatf("\ag[MQEQGFX]\ax usage: /eqgfx highlight [clear|off|<0xAARRGGBB>] [tint|ambient|both]");
+				return;
+			}
+			color = static_cast<uint32_t>(value);
+		}
+
 		uint32_t mode = Highlight_Tint;
 		if (ci_equals(szMode, "ambient"))
 			mode = Highlight_Ambient;
@@ -655,7 +744,6 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 		return;
 	}
 
-	// /eqgfx fx [on|off|test|slots <mask>|radius <n>|max <n>|pcs|npcs|list]
 	if (ci_equals(szCmd, "fx"))
 	{
 		char a1[MAX_STRING] = { 0 }, a2[MAX_STRING] = { 0 };
@@ -672,8 +760,8 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 				on ? "\agON\ax" : "\ayOFF\ax");
 		}
 		else if (ci_equals(a1, "slots"))  { s_fxDriver.slotMask = (int)strtoul(a2, nullptr, 0); WriteChatf("\ag[MQEQGFX]\ax slot mask 0x%x", s_fxDriver.slotMask); }
-		else if (ci_equals(a1, "radius")) { s_fxDriver.radius = (float)atof(a2); WriteChatf("\ag[MQEQGFX]\ax fx radius %.0f", s_fxDriver.radius); }
-		else if (ci_equals(a1, "max"))    { s_fxDriver.maxSpawns = atoi(a2); WriteChatf("\ag[MQEQGFX]\ax fx max %d", s_fxDriver.maxSpawns); }
+		else if (ci_equals(a1, "radius")) { const float r = GetFloatFromString(a2, s_fxDriver.radius); if (std::isfinite(r)) s_fxDriver.radius = std::clamp(r, 20.0f, 600.0f); WriteChatf("\ag[MQEQGFX]\ax fx radius %.0f", s_fxDriver.radius); }
+		else if (ci_equals(a1, "max"))    { s_fxDriver.maxSpawns = std::clamp(GetIntFromString(a2, s_fxDriver.maxSpawns), 1, 200); WriteChatf("\ag[MQEQGFX]\ax fx max %d", s_fxDriver.maxSpawns); }
 		else if (ci_equals(a1, "pcs"))    { s_fxDriver.includePCs = !s_fxDriver.includePCs; WriteChatf("\ag[MQEQGFX]\ax fx on PCs %d", s_fxDriver.includePCs); }
 		else if (ci_equals(a1, "npcs"))   { s_fxDriver.npcs = !s_fxDriver.npcs; WriteChatf("\ag[MQEQGFX]\ax fx on NPCs %d", s_fxDriver.npcs); }
 		else if (ci_equals(a1, "list"))
@@ -726,8 +814,6 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 	}
 	if (ci_equals(szCmd, "showmodel"))
 	{
-		// /eqgfx showmodel [off | plate|chain|cloth|leather|ring|scale]
-		//   no arg  -> naked body; armor type -> merge that Velious set's lower body.
 		char szState[MAX_STRING] = { 0 };
 		GetArg(szState, szLine, 2);
 		if (ci_equals(szState, "off"))
@@ -772,7 +858,13 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 			cfg.x0 = cfg.y0 = cfg.x1 = cfg.y1 = 0;
 			cfg.color = 0xFFFFFFFF;
 		}
-		WriteChatf("\ag[MQEQGFX]\ax %s portrait %s", szWho, on ? "\agon\ax" : "\ayoff\ax");
+		WriteChatf("\ag[MQEQGFX]\ax %s portrait %s \ao(in development)\ax", szWho, on ? "\agon\ax" : "\ayoff\ax");
+		return;
+	}
+
+	if (szCmd[0] && !ci_equals(szCmd, "status"))
+	{
+		WriteChatf("\ag[MQEQGFX]\ax unknown subcommand '%s' - \ay/eqgfx help\ax lists every command", szCmd);
 		return;
 	}
 
@@ -806,58 +898,103 @@ void EqgfxCommand(PlayerClient*, const char* szLine)
 	for (int slot = 0; slot < kPortraitSlots; ++slot)
 	{
 		const PortraitEngineState& es = s_portraitEngine[slot];
-		WriteChatf("\ag[MQEQGFX]\ax portrait slot %d: enabled=%d actor=%p tag='%s'",
-			slot, es.enabled ? 1 : 0, (const void*)es.actor, es.tag.c_str());
+		WriteChatf("\ag[MQEQGFX]\ax portrait slot %d: enabled=%d actor=%s tag='%s'",
+			slot, es.enabled ? 1 : 0, es.actor ? "yes" : "no", es.tag.c_str());
 	}
 #ifdef CEverQuest__StartCasting_x
 	const char* castMode = !s_castTapInstalled ? (s_castTapFailed ? "failed" : "inactive")
-		: (s_castTrackerOwned ? "plugin-owned tracker" : "MQ2Main tap");
-	WriteChatf("\ag[MQEQGFX]\ax StartCasting @ 0x%llX (%s), %d cast events queued",
-		static_cast<unsigned long long>(CEverQuest__StartCasting), castMode, static_cast<int>(castQueued));
+		: (s_castTrackerOwned ? "plugin-owned tracker" : "MacroQuest");
+	WriteChatf("\ag[MQEQGFX]\ax cast tracking: %s, %d cast events queued",
+		castMode, static_cast<int>(castQueued));
 #else
-	WriteChatf("\ag[MQEQGFX]\ax StartCasting offset not available in this build");
+	WriteChatf("\ag[MQEQGFX]\ax cast tracking unavailable on this client");
 #endif
+	WriteChatf("\ag[MQEQGFX]\ax \ay/eqgfx help\ax lists every command");
 }
 
-// ---------------------------------------------------------------------------
-// The Lua module. Called once per Lua state; every table wraps the shared
-// native state above (test/smoke.lua is the API contract).
+const void* s_sceneOwner = nullptr;
+const void* s_fxOwner = nullptr;
+std::array<const void*, kPortraitSlots> s_portraitOwners = {};
+
+void ClearScene()
+{
+	s_back.clear();
+	std::scoped_lock lock(s_sceneMutex);
+	s_front.clear();
+}
+
+void ClearLuaFx()
+{
+	std::scoped_lock lock(s_fxMutex);
+	s_fxLua.clear();
+}
+
+void ReleaseLuaOwner(const void* owner)
+{
+	if (!s_active || !owner)
+		return;
+	if (s_sceneOwner == owner)
+	{
+		s_sceneOwner = nullptr;
+		ClearScene();
+	}
+	if (s_fxOwner == owner)
+	{
+		s_fxOwner = nullptr;
+		ClearLuaFx();
+	}
+	{
+		std::scoped_lock lock(s_uiMutex);
+		if (s_uiNameLists.erase(owner))
+			RebuildUiNames();
+	}
+	ClearHighlightsOwnedBy(owner);
+	for (int slot = 0; slot < kPortraitSlots; ++slot)
+	{
+		if (s_portraitOwners[slot] != owner)
+			continue;
+		s_portraitOwners[slot] = nullptr;
+		std::scoped_lock lock(s_portraitMutex);
+		s_portraits[slot] = PortraitConfig{};
+	}
+}
+
+struct LuaStateGuard
+{
+	explicit LuaStateGuard(const void* o) : owner(o) {}
+	LuaStateGuard(LuaStateGuard&& other) noexcept : owner(std::exchange(other.owner, nullptr)) {}
+	LuaStateGuard(const LuaStateGuard&) = delete;
+	LuaStateGuard& operator=(const LuaStateGuard&) = delete;
+	LuaStateGuard& operator=(LuaStateGuard&&) = delete;
+	~LuaStateGuard() { ReleaseLuaOwner(owner); }
+
+	const void* owner = nullptr;
+};
 
 sol::table BuildModuleTable(sol::state_view sv)
 {
 	sol::table m = sv.create_table();
+	const void* owner = sol::main_thread(sv.lua_state(), sv.lua_state());
+	m["__owner"] = LuaStateGuard(owner);
 
-	// Compatibility fields, both constant now.
-	m["dll_stale"] = false;
-	m["ui_native"] = true;
 
-	// init() -> ok, err: whether the engine is ready to draw.
 	m.set_function("init", []() {
 		if (!s_active)
 			return std::make_tuple(false, sol::optional<std::string>("MQEQGFX plugin is not active"));
+		if (GetGameState() != GAMESTATE_INGAME)
+			return std::make_tuple(false, sol::optional<std::string>("not in game yet"));
 		if (!g_pDrawHandler.get())
 			return std::make_tuple(false, sol::optional<std::string>("render interface is null (not in game yet?)"));
 		return std::make_tuple(true, sol::optional<std::string>());
 	});
 
-	// clear() is the frame boundary: it publishes whatever was built since the
-	// last one and starts a fresh build. That keeps the usual
-	// clear -> add_* -> repeat loop working unchanged while making it
-	// flicker-free, at the cost of the scene being one build behind - which is
-	// invisible, since the alternative was showing a partial build.
-	m.set_function("clear", []() { PresentScene(/*startNewFrame*/ true); });
+	m.set_function("clear", [owner]() { s_sceneOwner = owner; PresentScene(true); });
 
-	// present() publishes without starting a new build. For a scene you build
-	// once and leave up: add_* the shapes, present(), stop touching it.
-	m.set_function("present", []() { PresentScene(/*startNewFrame*/ false); });
+	m.set_function("present", [owner]() { s_sceneOwner = owner; PresentScene(false); });
 
-	// blank() empties both buffers now, so the scene is gone this frame rather
-	// than after the next clear() publishes an empty build. What you want when
-	// a script pauses or switches off.
-	auto blankScene = []() {
-		s_back.clear();
-		std::scoped_lock lock(s_sceneMutex);
-		s_front.clear();
+	auto blankScene = [owner]() {
+		s_sceneOwner = owner;
+		ClearScene();
 	};
 	m.set_function("blank", blankScene);
 	m.set_function("shutdown", blankScene);
@@ -868,12 +1005,12 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return { s_sceneCalls.load(std::memory_order_relaxed), s_lastDraws.load(std::memory_order_relaxed) };
 	});
 
-	// -- world-space primitives ---------------------------------------------
-
 	m.set_function("add_circle", [](float x, float y, float z, float radius, int64_t color,
 		sol::optional<int> segments)
 	{
-		int segs = std::max(3, segments.value_or(48));
+		if (SceneFull())
+			return;
+		int segs = std::clamp(segments.value_or(48), 3, kMaxArcSegments);
 		uint32_t c = ToColor(color);
 
 		float px = x + radius, py = y;
@@ -890,7 +1027,9 @@ sol::table BuildModuleTable(sol::state_view sv)
 	m.set_function("add_arc", [](float cx, float cy, float cz, float radius, float startRad, float endRad,
 		int64_t color, sol::optional<int> segments)
 	{
-		int segs = std::max(1, segments.value_or(24));
+		if (SceneFull())
+			return;
+		int segs = std::clamp(segments.value_or(24), 1, kMaxArcSegments);
 		uint32_t c = ToColor(color);
 
 		float ex0 = cx + radius * cosf(startRad), ey0 = cy + radius * sinf(startRad);
@@ -908,37 +1047,33 @@ sol::table BuildModuleTable(sol::state_view sv)
 	});
 
 	m.set_function("add_line", [](float x1, float y1, float z1, float x2, float y2, float z2, int64_t color) {
+		if (SceneFull())
+			return;
 		s_back.segments.push_back({ x1, y1, z1, x2, y2, z2, ToColor(color), Seg_World });
 	});
 
-	// -- screen-space primitives (pixels, no projection) ---------------------
-
 	m.set_function("add_screen_line", [](float x1, float y1, float x2, float y2, int64_t color) {
+		if (SceneFull())
+			return;
 		s_back.segments.push_back({ x1, y1, 0.0f, x2, y2, 0.0f, ToColor(color), Seg_Screen });
 	});
 
 	m.set_function("add_screen_rect", [](float x0, float y0, float x1, float y1, int64_t color) {
+		if (SceneFull())
+			return;
 		s_back.rects.push_back({ x0, y0, x1, y1, ToColor(color) });
 	});
 
 	m.set_function("set_thickness", [](int t) { s_thickness = std::max(0, t); });
 
-	// -- model highlighting ---------------------------------------------------
-
-	// highlight(spawnID, color[, mode]) - recolor the spawn's actual 3D model.
-	// mode is a bitmask: 1 tints every material, 2 adds a constant ambient
-	// (glow), 3 both. Defaults to tint. The look is written on the next pulse
-	// and rewritten whenever the model reloads; it is NOT part of the retained
-	// scene, so clear() does not remove it - use unhighlight().
-	m.set_function("highlight", [](int spawnId, int64_t color, sol::optional<int> mode) {
+	m.set_function("highlight", [owner](int spawnId, int64_t color, sol::optional<int> mode) {
 		SetSpawnHighlight(spawnId, ToColor(color),
-			static_cast<uint32_t>(mode.value_or(static_cast<int>(Highlight_Tint))));
+			static_cast<uint32_t>(mode.value_or(static_cast<int>(Highlight_Tint))), owner);
 	});
 
 	m.set_function("unhighlight", [](int spawnId) { ClearSpawnHighlight(spawnId); });
 	m.set_function("clear_highlights", []() { ClearAllHighlights(); });
 
-	// highlights() -> { {id=, color=, mode=, applied=}, ... }
 	m.set_function("highlights", [](sol::this_state L) {
 		sol::state_view sv(L);
 		sol::table out = sv.create_table();
@@ -955,26 +1090,18 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return out;
 	});
 
-	// -- GPU effects ----------------------------------------------------------
-
-	// fx_clear() then fx_add(...) each pass, mirroring clear()/add_*. Effects
-	// are generated on the GPU: the cost of one is a struct write, so segment
-	// counts and spawn counts stop being a budget.
-	m.set_function("fx_clear", []() {
-		std::scoped_lock lock(s_fxMutex);
-		s_fxSubmit.clear();
+	m.set_function("fx_clear", [owner]() {
+		s_fxOwner = owner;
+		ClearLuaFx();
 	});
 
-	// fx_add(form, x, y, z, opts) - opts is a table of any of:
-	//   radius height speed tilt phase width segments color
-	//   comet additive nodepth reverse screenwidth
-	//   p0 p1 p2 p3   (form-specific; see gpu/LineFX.h)
-	m.set_function("fx_add", [](int form, float x, float y, float z, sol::optional<sol::table> opts) {
+	m.set_function("fx_add", [owner](int form, float x, float y, float z, sol::optional<sol::table> opts) {
 		if (form < 0 || form >= static_cast<int>(eqgfx::gpu::FxForm_Count))
-			return;
+			return false;
+		s_fxOwner = owner;
 		std::scoped_lock lock(s_fxMutex);
-		if (s_fxSubmit.size() >= eqgfx::gpu::kMaxInstances)
-			return;
+		if (s_fxLua.size() >= eqgfx::gpu::kMaxInstances)
+			return false;
 
 		eqgfx::gpu::FxInstance ix = {};
 		ix.pos[0] = x; ix.pos[1] = y; ix.pos[2] = z;
@@ -982,6 +1109,7 @@ sol::table BuildModuleTable(sol::state_view sv)
 		ix.radius = 3.0f; ix.height = 4.0f; ix.speed = 1.0f;
 		ix.segments = 40; ix.width = 0.05f;
 		ix.rgba[0] = ix.rgba[1] = ix.rgba[2] = ix.rgba[3] = 1.0f;
+		bool segmentsGiven = false;
 
 		if (opts)
 		{
@@ -992,55 +1120,72 @@ sol::table BuildModuleTable(sol::state_view sv)
 			ix.tilt     = o.get_or("tilt", 0.0f);
 			ix.phase    = o.get_or("phase", 0.0f);
 			ix.width    = o.get_or("width", ix.width);
-			ix.segments = static_cast<uint32_t>(o.get_or("segments", 40));
+			if (sol::optional<int> segments = o["segments"])
+			{
+				ix.segments = static_cast<uint32_t>(std::clamp(*segments, 1, static_cast<int>(eqgfx::gpu::kMaxSegsPerInstance)));
+				segmentsGiven = true;
+			}
 			ix.p0 = o.get_or("p0", 0.0f); ix.p1 = o.get_or("p1", 0.0f);
 			ix.p2 = o.get_or("p2", 0.0f); ix.p3 = o.get_or("p3", 0.0f);
 
 			if (sol::optional<int64_t> c = o["color"])
 			{
-				const uint32_t v = ToColor(*c);
-				ix.rgba[0] = ((v >> 16) & 0xFF) / 255.0f;
-				ix.rgba[1] = ((v >> 8) & 0xFF) / 255.0f;
-				ix.rgba[2] = (v & 0xFF) / 255.0f;
-				ix.rgba[3] = ((v >> 24) & 0xFF) / 255.0f;
+				UnpackArgb(ToColor(*c), ix.rgba);
 			}
 			if (o.get_or("comet", false))       ix.flags |= eqgfx::gpu::FxFlag_Comet;
 			if (o.get_or("additive", false))    ix.flags |= eqgfx::gpu::FxFlag_Additive;
 			if (o.get_or("nodepth", false))     ix.flags |= eqgfx::gpu::FxFlag_NoDepth;
 			if (o.get_or("reverse", false))     ix.flags |= eqgfx::gpu::FxFlag_Reverse;
 			if (o.get_or("screenwidth", false)) ix.flags |= eqgfx::gpu::FxFlag_ScreenWidth;
+			if (o.get_or("noenvelope", false))  ix.flags |= eqgfx::gpu::FxFlag_NoEnvelope;
+			ix.p4  = o.get_or("p4", 0.0f);
+			ix.p5  = o.get_or("p5", 0.0f);
+			ix.yaw = o.get_or("yaw", 0.0f);
+			if (sol::optional<int64_t> c2 = o["color2"])
+			{
+				UnpackArgb(ToColor(*c2), ix.rgba2);
+			}
+			if (sol::optional<float> life = o["life"])
+			{
+				ix.life  = std::max(*life, 0.05f);
+				ix.birth = FxClockNow() + o.get_or("delay", 0.0f);
+			}
 
-			if (sol::optional<sol::table> p2t = o["to"])   // FxForm_Segment endpoint
+			if (sol::optional<sol::table> p2t = o["to"])
 			{
 				ix.pos2[0] = (*p2t).get_or(1, x);
 				ix.pos2[1] = (*p2t).get_or(2, y);
 				ix.pos2[2] = (*p2t).get_or(3, z);
 			}
 		}
-		s_fxSubmit.push_back(ix);
+		if (form == eqgfx::gpu::FxForm_Glyph && !segmentsGiven)
+		{
+			const uint32_t copies = static_cast<uint32_t>(std::clamp(std::ceil(ix.p2), 1.0f, 128.0f));
+			ix.segments = std::min(eqgfx::gpu::kMaxSegsPerInstance,
+				eqgfx::gpu::GlyphSegments(static_cast<uint32_t>(ix.p0)) * copies);
+		}
+		s_fxLua.push_back(ix);
+		return true;
 	});
 
-	// fx_preset(class, index, x, y, z, phase, alpha) - drop one of the compiled
-	// catalogue entries at a position. This is how a script reuses a shipped
-	// look instead of rebuilding it by hand.
-	m.set_function("fx_preset", [](const char* cls, int index, float x, float y, float z,
+	m.set_function("fx_preset", [owner](const char* cls, int index, float x, float y, float z,
 		sol::optional<float> phase, sol::optional<float> alpha)
 	{
+		s_fxOwner = owner;
 		const eqgfx::gpu::ClassFx* c = eqgfx::gpu::FindClassFx(cls);
 		if (!c || index < 0 || index >= c->count)
 			return false;
 		std::scoped_lock lock(s_fxMutex);
-		if (s_fxSubmit.size() >= eqgfx::gpu::kMaxInstances)
+		if (s_fxLua.size() >= eqgfx::gpu::kMaxInstances)
 			return false;
 		const float pos[3] = { x, y, z };
 		eqgfx::gpu::FxInstance ix;
 		eqgfx::gpu::MakeInstance(c->defs[index], pos, phase.value_or(0.0f),
 			alpha.value_or(1.0f), ix);
-		s_fxSubmit.push_back(ix);
+		s_fxLua.push_back(ix);
 		return true;
 	});
 
-	// fx_catalog() -> { WIZ = { "Arcane", "Fire", ... }, ... }
 	m.set_function("fx_catalog", [](sol::this_state L) {
 		sol::state_view sv(L);
 		sol::table out = sv.create_table();
@@ -1074,10 +1219,58 @@ sol::table BuildModuleTable(sol::state_view sv)
 	m["FX_SPIRE"]   = static_cast<int>(eqgfx::gpu::FxForm_Spire);
 	m["FX_LATTICE"] = static_cast<int>(eqgfx::gpu::FxForm_Lattice);
 	m["FX_SEGMENT"] = static_cast<int>(eqgfx::gpu::FxForm_Segment);
+	m["FX_FLAME"]     = static_cast<int>(eqgfx::gpu::FxForm_Flame);
+	m["FX_VINES"]     = static_cast<int>(eqgfx::gpu::FxForm_Vines);
+	m["FX_THORNS"]    = static_cast<int>(eqgfx::gpu::FxForm_Thorns);
+	m["FX_GLYPH"]     = static_cast<int>(eqgfx::gpu::FxForm_Glyph);
+	m["FX_WINGS"]     = static_cast<int>(eqgfx::gpu::FxForm_Wings);
+	m["FX_LIGHTNING"] = static_cast<int>(eqgfx::gpu::FxForm_Lightning);
+	m["FX_BOLT"]      = static_cast<int>(eqgfx::gpu::FxForm_Bolt);
+	m["FX_RAIN"]      = static_cast<int>(eqgfx::gpu::FxForm_Rain);
+	m["FX_SPARKLE"]   = static_cast<int>(eqgfx::gpu::FxForm_Sparkle);
+	m["FX_RUNE"]      = static_cast<int>(eqgfx::gpu::FxForm_Rune);
+	m["FX_VORTEX"]    = static_cast<int>(eqgfx::gpu::FxForm_Vortex);
+	m["FX_DOME"]      = static_cast<int>(eqgfx::gpu::FxForm_Dome);
+	m["FX_CRYSTAL"]   = static_cast<int>(eqgfx::gpu::FxForm_Crystal);
+	m["FX_DRAIN"]     = static_cast<int>(eqgfx::gpu::FxForm_Drain);
+	m["FX_BUBBLES"]   = static_cast<int>(eqgfx::gpu::FxForm_Bubbles);
+	m["FX_WIND"]      = static_cast<int>(eqgfx::gpu::FxForm_Wind);
+	m["FX_BURST"]     = static_cast<int>(eqgfx::gpu::FxForm_Burst);
+	m["FX_CRACKS"]    = static_cast<int>(eqgfx::gpu::FxForm_Cracks);
 
-	// --- unit frames / hover healing -------------------------------------
-	// Exposed so a script can build its own frames, or bind a hovercast to
-	// something smarter than a fixed gem, without giving up the C++ path.
+	{
+		sol::table g = sv.create_table();
+		for (uint32_t id = 0; id < eqgfx::gpu::Glyph_Count; ++id)
+			g[eqgfx::gpu::GlyphName(id)] = static_cast<int>(id);
+		m["GLYPH"] = g;
+		sol::table a = sv.create_table();
+		a["rise"]   = static_cast<int>(eqgfx::gpu::GlyphAnim_Rise);
+		a["bob"]    = static_cast<int>(eqgfx::gpu::GlyphAnim_Bob);
+		a["spin"]   = static_cast<int>(eqgfx::gpu::GlyphAnim_Spin);
+		a["pop"]    = static_cast<int>(eqgfx::gpu::GlyphAnim_Pop);
+		a["wiggle"] = static_cast<int>(eqgfx::gpu::GlyphAnim_Wiggle);
+		a["ascend"] = static_cast<int>(eqgfx::gpu::GlyphAnim_Ascend);
+		a["descend"] = static_cast<int>(eqgfx::gpu::GlyphAnim_Descend);
+		a["roll"]   = static_cast<int>(eqgfx::gpu::GlyphAnim_Roll);
+		m["GLYPH_ANIM"] = a;
+	}
+
+	m.set_function("fx_now", []() { return FxClockNow(); });
+
+	m.set_function("spellfx_enabled", [](sol::optional<bool> on) {
+		if (on) SetSpellFxEnabled(*on);
+		return SpellFxEnabled();
+	});
+
+	m.set_function("spellfx_play", [](int spellId, sol::optional<int> caster,
+		sol::optional<int> target, sol::optional<int> castMs)
+	{
+		const int me = pLocalPlayer ? pLocalPlayer->SpawnID : 0;
+		const int tgt = target.value_or(pTarget ? pTarget->SpawnID : me);
+		SpellFxPlay(spellId, caster.value_or(me), tgt, static_cast<uint32_t>(std::max(0, castMs.value_or(0))));
+	});
+
+	m.set_function("spellfx_look", [](int spellId) { return SpellFxDescribe(spellId); });
 
 	m.set_function("focus", [](sol::optional<int> id) {
 		if (id) SetSecondaryTarget(*id);
@@ -1089,15 +1282,12 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return GetHoverUnit();
 	});
 
-	// hover -> focus -> target, the WoW mouseover-macro fallback chain.
 	m.set_function("cast_unit", []() { return ResolveCastUnit(); });
 
-	// Cast a memorised gem (1-based) at any spawn without changing target.
 	m.set_function("cast_at", [](int spawnId, int gem) {
 		return CastAtSpawn(spawnId, gem);
 	});
 
-	// spellId, elapsedMs, castMs - nil when that spawn isn't casting.
 	m.set_function("unit_cast", [](int spawnId, sol::this_state L)
 		-> sol::object {
 		UnitCast uc;
@@ -1114,9 +1304,6 @@ sol::table BuildModuleTable(sol::state_view sv)
 	m["HIGHLIGHT_TINT"] = static_cast<int>(Highlight_Tint);
 	m["HIGHLIGHT_AMBIENT"] = static_cast<int>(Highlight_Ambient);
 
-	// -- projection -----------------------------------------------------------
-
-	// world_to_screen() -> sx, sy, visible: in front of the camera AND on screen.
 	m.set_function("world_to_screen", [](float x, float y, float z) -> std::tuple<float, float, bool> {
 		float sx = 0.0f, sy = 0.0f;
 		bool visible = WorldToScreen(x, y, z, sx, sy);
@@ -1129,8 +1316,6 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return { sx, sy, visible };
 	});
 
-	// project() -> sx, sy, infront: raw pixels (no viewport clamp) plus the
-	// in-front-of-camera bool. Right test for shapes that go off screen.
 	m.set_function("project", [](float x, float y, float z) -> std::tuple<float, float, bool> {
 		float sx = 0.0f, sy = 0.0f;
 		bool infront = WorldToScreen(x, y, z, sx, sy);
@@ -1143,14 +1328,33 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return { width, height };
 	});
 
-	// -- spell geometry -------------------------------------------------------
+	m.set_function("spawn_search", [](sol::this_state L, const std::string& spec, sol::optional<int> max) {
+		sol::state_view sv(L);
+		sol::table out = sv.create_table();
+		PlayerClient* me = pLocalPlayer.get();
+		if (!me || spec.size() >= MAX_STRING)
+			return out;
+
+		MQSpawnSearch search;
+		ClearSearchSpawn(&search);
+		ParseSearchSpawn(spec.c_str(), &search);
+
+		std::vector<std::pair<float, int>> found;
+		for (PlayerClient* sp = pSpawnList; sp; sp = sp->pNext)
+		{
+			if (SpawnMatchesSearch(&search, me, sp))
+				found.emplace_back(GetDistanceSquared3D(me, sp), static_cast<int>(sp->SpawnID));
+		}
+		std::sort(found.begin(), found.end());
+
+		const size_t limit = std::min(found.size(), static_cast<size_t>(std::max(max.value_or(INT_MAX), 0)));
+		for (size_t i = 0; i < limit; ++i)
+			out[i + 1] = found[i].second;
+		return out;
+	});
 
 	m.set_function("spell_geom", [](sol::this_state L, int spellID) -> sol::object {
-		ClientSpellManager* mgr = pSpellMgr.get();
-		if (!mgr || spellID <= 0)
-			return sol::make_object(L, sol::nil);
-
-		EQ_Spell* spell = mgr->GetSpellByID(spellID);
+		EQ_Spell* spell = GetSpellByID(spellID);
 		if (!spell)
 			return sol::make_object(L, sol::nil);
 
@@ -1164,122 +1368,110 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return t;
 	});
 
-	// -- native UI occlusion --------------------------------------------------
-
-	m.set_function("set_ui_names", [](sol::table names) {
+	m.set_function("set_ui_names", [owner](sol::table names) {
 		std::vector<std::string> list;
 		size_t count = names.size();
 		list.reserve(count);
 		for (size_t i = 1; i <= count; ++i)
 		{
 			sol::optional<std::string> name = names[i];
-			if (name && !name->empty())
+			if (name && !name->empty() && name->size() <= kMaxWindowNameLen)
 				list.push_back(std::move(*name));
 		}
 
 		std::scoped_lock lock(s_uiMutex);
-		s_uiNames = std::move(list);
+		s_uiNameLists[owner].names = std::move(list);
+		RebuildUiNames();
 	});
 
-	// get_ui_rects() -> { {x0,y0,x1,y1, idx=1-based-name-index}, ... }
-	m.set_function("get_ui_rects", [](sol::this_state L) {
-		std::vector<UiRect> snapshot;
+	m.set_function("ui_subtract", [owner](sol::this_state L, float x0, float y0, float x1, float y1,
+		sol::optional<int> cap) -> sol::object
+	{
+		s_uiRectsWanted.store(true, std::memory_order_relaxed);
+		const size_t limit = static_cast<size_t>(std::clamp(cap.value_or(24), 1, 64));
+		std::vector<std::array<float, 4>> pieces{ { x0, y0, x1, y1 } };
+		bool covered = false;
 		{
 			std::scoped_lock lock(s_uiMutex);
-			snapshot = s_uiRects;
+			auto it = s_uiNameLists.find(owner);
+			if (it != s_uiNameLists.end())
+			{
+				const std::vector<int>& fromUnion = it->second.fromUnion;
+				for (const UiRect& w : s_uiRects)
+				{
+					if (w.nameIdx < 0 || w.nameIdx >= static_cast<int>(fromUnion.size()) || fromUnion[w.nameIdx] < 0)
+						continue;
+					if (w.x0 >= x1 || w.x1 <= x0 || w.y0 >= y1 || w.y1 <= y0)
+						continue;
+					covered = true;
+					SubtractRect(pieces, w, limit);
+				}
+			}
+		}
+		if (!covered)
+			return sol::make_object(L, sol::nil);
+
+		sol::state_view sv(L);
+		sol::table t = sv.create_table(static_cast<int>(pieces.size()), 0);
+		for (size_t i = 0; i < pieces.size(); ++i)
+			t[i + 1] = sv.create_table_with(1, pieces[i][0], 2, pieces[i][1], 3, pieces[i][2], 4, pieces[i][3]);
+		return t;
+	});
+
+	m.set_function("get_ui_rects", [owner](sol::this_state L) {
+		s_uiRectsWanted.store(true, std::memory_order_relaxed);
+		std::vector<std::pair<UiRect, std::string>> snapshot;
+		{
+			std::scoped_lock lock(s_uiMutex);
+			auto it = s_uiNameLists.find(owner);
+			if (it != s_uiNameLists.end())
+			{
+				const std::vector<int>& fromUnion = it->second.fromUnion;
+				for (const UiRect& rect : s_uiRects)
+				{
+					if (rect.nameIdx >= 0 && rect.nameIdx < static_cast<int>(fromUnion.size()) && fromUnion[rect.nameIdx] >= 0)
+						snapshot.push_back({ { rect.x0, rect.y0, rect.x1, rect.y1, fromUnion[rect.nameIdx] }, s_uiNames[rect.nameIdx] });
+				}
+			}
 		}
 
 		sol::state_view sv(L);
 		sol::table t = sv.create_table(static_cast<int>(snapshot.size()), 0);
 		int i = 1;
-		for (const UiRect& rect : snapshot)
+		for (const auto& [rect, name] : snapshot)
 		{
-			sol::table rt = sv.create_table(4, 1);
+			sol::table rt = sv.create_table(4, 2);
 			rt[1] = rect.x0;
 			rt[2] = rect.y0;
 			rt[3] = rect.x1;
 			rt[4] = rect.y1;
 			rt["idx"] = rect.nameIdx + 1;
+			rt["name"] = name;
 			t[i++] = rt;
 		}
 		return t;
 	});
 
-	// Kept for API compatibility.
-	m.set_function("ui_find_mode", []() { return 1; });
-	m.set_function("ui_stats", []() -> std::tuple<int, int, int> {
+	m.set_function("ui_stats", []() -> std::tuple<int, int> {
 		std::scoped_lock lock(s_uiMutex);
-		return { s_uiStatNames, s_uiStatFound, 0 };
+		return { s_uiStatNames, s_uiStatFound };
 	});
 
-	// -- colors ---------------------------------------------------------------
-
-	// Same int32 bit pattern LuaJIT's bit.bor produced, so persisted settings
-	// and comparisons behave identically.
 	m.set_function("argb", [](int64_t a, int64_t r, int64_t g, int64_t b) -> int32_t {
-		return static_cast<int32_t>((ToColor(a) << 24) | (ToColor(r) << 16) | (ToColor(g) << 8) | ToColor(b));
+		return static_cast<int32_t>((Channel(a) << 24) | (Channel(r) << 16) | (Channel(g) << 8) | Channel(b));
 	});
 	m.set_function("abgr", [](int64_t a, int64_t b, int64_t g, int64_t r) -> int32_t {
-		return static_cast<int32_t>((ToColor(a) << 24) | (ToColor(b) << 16) | (ToColor(g) << 8) | ToColor(r));
+		return static_cast<int32_t>((Channel(a) << 24) | (Channel(b) << 16) | (Channel(g) << 8) | Channel(r));
 	});
 
-	// -- calibration/debug helpers (tools/) -----------------------------------
-
-	m.set_function("get_eye", []() -> std::tuple<float, float, float> {
-		CVector3 eye(0.0f, 0.0f, 0.0f);
-		if (CRender* render = g_pDrawHandler.get())
-			render->GetEyeOffset(eye);
-		return { eye.X, eye.Y, eye.Z };
-	});
-
-	// Engine's world->camera transform. Raw coordinates, no TLO swap.
-	m.set_function("world_to_camera", [](float x, float y, float z) -> std::tuple<float, float, float> {
-		CVector3 cam(0.0f, 0.0f, 0.0f);
-		if (CRender* render = g_pDrawHandler.get())
-			render->TransformWorldToCamera(CVector3(x, y, z), cam);
-		return { cam.X, cam.Y, cam.Z };
-	});
-
-	m.set_function("dump_matrix", [](sol::this_state L) {
-		sol::state_view sv(L);
-		sol::table t = sv.create_table(16, 0);
-		if (CRender* render = g_pDrawHandler.get())
-		{
-			const float* f = reinterpret_cast<const float*>(&render->matrixViewProj);
-			for (int i = 0; i < 16; ++i)
-				t[i + 1] = f[i];
-		}
-		else
-		{
-			for (int i = 0; i < 16; ++i)
-				t[i + 1] = 0.0f;
-		}
-		return t;
-	});
-
-	// No-op calibration knobs kept for API compatibility
-	// (tools/calibrate.lua still calls them).
-	auto noop = [](sol::variadic_args) {};
-	m.set_function("set_axis_mode", noop);
-	m.set_function("set_convention", noop);
-	m.set_function("set_eyerel", noop);
-	m.set_function("set_wsign", noop);
-	m.set_function("set_flipx", noop);
-	m.set_function("set_flipy", noop);
-
-	// -- combat event feeds ---------------------------------------------------
-
-	// Debug helper: resolved address of the cast-start handler, 0 if unavailable.
-	m.set_function("start_casting_addr", []() -> double {
+	m.set_function("cast_feed_live", []() -> bool {
 #ifdef CEverQuest__StartCasting_x
-		return static_cast<double>(CEverQuest__StartCasting);
+		return s_castTapInstalled;
 #else
-		return 0.0;
+		return false;
 #endif
 	});
 
-	// poll_casts() -> { {spellID=, spawnID=, castTimeMs=, timestamp=}, ... }
-	// Drains the queue: single consumer by design.
 	m.set_function("poll_casts", [](sol::this_state L) {
 		std::vector<CastEvent> events;
 		{
@@ -1302,10 +1494,6 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return t;
 	});
 
-	// poll_damage() -> { {attackerID=, targetID=, damage=, spellID=, skill=,
-	//                     heal=, totalHeal=, flags=, timestamp=}, ... }
-	// Drains the damage/heal queue: melee, spells, misses (damage <= 0), heals.
-	// Single consumer by design.
 	m.set_function("poll_damage", [](sol::this_state L) {
 		std::vector<DamageEvent> events;
 		{
@@ -1333,19 +1521,17 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return t;
 	});
 
-	// -- 3D portraits (ObjectPreview) -----------------------------------------
-	// opts: { enabled=true, subject='self'|'target'|'none',
-	// window='PlayerWindow'/'TargetWindow' (tracked), OR x0,y0,x1,y1 pixel rect,
-	// color=argb }
 	m.set_function("portrait_slots", []() { return static_cast<int>(kPortraitSlots); });
 
-	m.set_function("set_portrait", [](int slot, sol::table opts) {
+	m.set_function("set_portrait", [owner](int slot, sol::table opts) {
 		if (slot < 0 || slot >= kPortraitSlots) return;
+		s_portraitOwners[slot] = owner;
 		PortraitConfig cfg;
 		cfg.enabled = opts["enabled"].get_or(true);
 		std::string who = opts["subject"].get_or(std::string("self"));
 		cfg.subject = (who == "target") ? PS_TARGET : (who == "none") ? PS_NONE : PS_SELF;
 		cfg.window = opts["window"].get_or(std::string());
+		if (cfg.window.size() > kMaxWindowNameLen) return;
 		cfg.x0 = opts["x0"].get_or(0);
 		cfg.y0 = opts["y0"].get_or(0);
 		cfg.x1 = opts["x1"].get_or(0);
@@ -1357,6 +1543,7 @@ sol::table BuildModuleTable(sol::state_view sv)
 
 	m.set_function("clear_portrait", [](int slot) {
 		if (slot < 0 || slot >= kPortraitSlots) return;
+		s_portraitOwners[slot] = nullptr;
 		std::scoped_lock lock(s_portraitMutex);
 		s_portraits[slot] = PortraitConfig{};
 	});
@@ -1366,15 +1553,48 @@ sol::table BuildModuleTable(sol::state_view sv)
 
 } // namespace
 
-// Resolved by MQ2Lua's package loader for require('plugin.MQEQGFX').
+FxStats GetFxStats()
+{
+	return { s_fxLastInstances.load(std::memory_order_relaxed), s_fxLastSegments.load(std::memory_order_relaxed),
+		s_lineFX.Ready(), s_lineFX.LastError() };
+}
+
+GfxOptions GetGfxOptions()
+{
+	GfxOptions o;
+	o.classFx          = s_fxDriver.enabled;
+	o.classFxPCs       = s_fxDriver.includePCs;
+	o.classFxNPCs      = s_fxDriver.npcs;
+	o.classFxRadius    = s_fxDriver.radius;
+	o.classFxMaxSpawns = s_fxDriver.maxSpawns;
+	o.classFxSlotMask  = s_fxDriver.slotMask;
+	o.classFxStyle     = s_fxDriver.style;
+	o.testRing         = s_fxTest.load(std::memory_order_relaxed);
+	o.gpuEffects       = s_fxEnabled.load(std::memory_order_relaxed);
+	o.damageDebug      = s_dmgDebug.load(std::memory_order_relaxed);
+	return o;
+}
+
+void SetGfxOptions(const GfxOptions& opts)
+{
+	s_fxDriver.enabled    = opts.classFx;
+	s_fxDriver.includePCs = opts.classFxPCs;
+	s_fxDriver.npcs       = opts.classFxNPCs;
+	s_fxDriver.radius     = opts.classFxRadius;
+	s_fxDriver.maxSpawns  = opts.classFxMaxSpawns;
+	s_fxDriver.slotMask   = opts.classFxSlotMask;
+	s_fxDriver.style      = opts.classFxStyle;
+	s_fxTest.store(opts.testRing, std::memory_order_relaxed);
+	s_fxEnabled.store(opts.gpuEffects, std::memory_order_relaxed);
+	s_dmgDebug.store(opts.damageDebug, std::memory_order_relaxed);
+}
+
 PLUGIN_API bool CreateLuaModule(sol::this_state L, sol::object& outModule)
 {
 	outModule = BuildModuleTable(sol::state_view(L));
 	return true;
 }
 
-// Stable per-spawn phase, so two wizards look like wizards without pulsing in
-// lockstep. Same trick the Lua path used, just hashed here instead.
 float FxPhaseFor(int spawnId)
 {
 	uint32_t h = static_cast<uint32_t>(spawnId) * 2654435761u;
@@ -1384,7 +1604,9 @@ float FxPhaseFor(int spawnId)
 	return (h & 0xFFFFFF) / static_cast<float>(0x1000000);
 }
 
-// Walk the spawn list and submit catalogue instances. Main thread only.
+struct SeenTimes { float first; float last; };
+static std::unordered_map<int, SeenTimes> s_classFxSeen;
+
 void PulseClassFx()
 {
 	std::vector<eqgfx::gpu::FxInstance> out;
@@ -1394,9 +1616,6 @@ void PulseClassFx()
 
 	if (s_fxTest.load(std::memory_order_relaxed) && me)
 	{
-		// Deliberately large, bright and additive so it cannot be mistaken for
-		// nothing. If this does not appear, the problem is the pipeline, not
-		// the catalogue or the spawn scan.
 		eqgfx::gpu::FxInstance ix = {};
 		ix.pos[0] = me->X; ix.pos[1] = me->Y; ix.pos[2] = me->Z;
 		ix.form = eqgfx::gpu::FxForm_Ring;
@@ -1413,6 +1632,8 @@ void PulseClassFx()
 	{
 		const float r2 = cfg.radius * cfg.radius;
 		int taken = 0;
+		const float now = FxClockNow();
+		const float motion = cfg.style.motion;
 		for (PlayerClient* sp = pSpawnList; sp && taken < cfg.maxSpawns; sp = sp->pNext)
 		{
 			if (sp == me)
@@ -1423,20 +1644,31 @@ void PulseClassFx()
 			if (isPC ? !cfg.includePCs : (type != NPC || !cfg.npcs))
 				continue;
 
-			const float dx = sp->X - me->X, dy = sp->Y - me->Y, dz = sp->Z - me->Z;
-			if (dx * dx + dy * dy + dz * dz > r2)
+			if (GetDistanceSquared3D(me, sp) > r2)
 				continue;
 
-			const int cls = sp->GetClass();
-			if (cls <= 0 || cls >= (int)(sizeof(eqlib::ClassInfo) / sizeof(eqlib::ClassInfo[0])))
-				continue;
-			const eqgfx::gpu::ClassFx* fx =
-				eqgfx::gpu::FindClassFx(eqlib::ClassInfo[cls].UCShortName);
+			const eqgfx::gpu::ClassFx* fx = eqgfx::gpu::FindClassFxById(sp->GetClass());
 			if (!fx)
 				continue;
 
-			const float pos[3] = { sp->X, sp->Y, sp->Z };
 			const float phase = FxPhaseFor(sp->SpawnID);
+
+			SeenTimes& seen = s_classFxSeen[sp->SpawnID];
+			if (seen.last == 0.0f || now - seen.last > 2.0f)
+				seen.first = now;
+			seen.last = now;
+			const float alpha = AlwaysOnFade(cfg.style, now - seen.first, phase);
+
+			float pos[3] = { sp->X, sp->Y, sp->Z };
+			if (motion > 0.0f)
+			{
+				const float h = sp->AvatarHeight > 0.5f ? sp->AvatarHeight : 6.0f;
+				const float a = now * 0.6f * motion + phase * 6.2831853f;
+				pos[0] += std::cos(a) * 0.6f * motion;
+				pos[1] += std::sin(a) * 0.6f * motion;
+				pos[2] += (0.5f - 0.5f * std::cos(now * 0.45f * motion + phase * 6.2831853f)) * h * 0.55f;
+			}
+
 			for (int slot = 0; slot < fx->count && slot < 32; ++slot)
 			{
 				if ((cfg.slotMask & (1 << slot)) == 0)
@@ -1444,43 +1676,64 @@ void PulseClassFx()
 				if (out.size() >= eqgfx::gpu::kMaxInstances)
 					break;
 				eqgfx::gpu::FxInstance ix;
-				eqgfx::gpu::MakeInstance(fx->defs[slot], pos, phase, cfg.alpha, ix);
+				eqgfx::gpu::MakeInstance(fx->defs[slot], pos, phase, alpha, ix);
+				if (motion > 0.0f)
+				{
+					ix.flags |= eqgfx::gpu::FxFlag_Drift;
+					ix.p5 = 0.3f * motion * (slot % 2 ? -1.0f : 1.0f);
+				}
 				out.push_back(ix);
 			}
 			++taken;
 		}
 		s_fxDriverSpawns.store(static_cast<uint32_t>(taken), std::memory_order_relaxed);
+
+		if ((static_cast<int>(now) % 16) == 0)
+			for (auto it = s_classFxSeen.begin(); it != s_classFxSeen.end(); )
+				it = (now - it->second.last > 30.0f) ? s_classFxSeen.erase(it) : std::next(it);
 	}
 	else
 	{
 		s_fxDriverSpawns.store(0, std::memory_order_relaxed);
 	}
 
-	// The focus marker is appended here rather than submitted separately: this
-	// vector is swapped wholesale each pulse, so a second producer would just
-	// lose the race.
+	PulseSpellFx(out);
 	BuildUnitMarkers(out);
+	BuildAttackFx(out);
+	BuildTargetRing(out);
 
 	std::scoped_lock lock(s_fxMutex);
 	s_fxSubmit.swap(out);
 }
 
-// Background upkeep: lazy tap installs, capture priming, throttled saves.
 PLUGIN_API void OnPulse()
 {
-	if (!s_active || GetGameState() != GAMESTATE_INGAME) return;
+	if (!s_active) return;
+
+	eqgfx::settings::Global().Pulse();
+
+	eqgfx::ui::PulseNativeUi();
+
+	if (GetGameState() != GAMESTATE_INGAME) return;
 
 	if (!s_captureInstalled)
-		InstallSwapCapture(/*auto_*/ true);
+		InstallSwapCapture(true);
 
-	// The taps install lazily: the game offsets resolve after startup.
 	if (!s_dmgTapInstalled)
 		InstallDamageTap();
 
 	PulseCastTap();
 
-	// Prime the capture from disk so a fresh session renders the saved look
-	// without a rezone. Guarded so a missing file isn't reopened every frame.
+	InstallNametagBatch();
+	InstallAnimationLod();
+	InstallParticleGpu();
+	SampleActorAnimationStats();
+	SampleParticleGpuStats();
+	PulseAnimationLod();
+	PulseGfxSettings();
+	InstallSelfCastHook();
+	SampleEqDrawCounter();
+
 	if (!s_haveCapture)
 	{
 		static std::string triedDef;
@@ -1491,20 +1744,24 @@ PLUGIN_API void OnPulse()
 		}
 	}
 
-	// Apply new highlights and reap despawned ones every pulse; the periodic
-	// rewrite below covers material rebuilds that keep the same actor.
-	PulseHighlights();
-	PulseClassFx();
-	PulseUnits();
-
 	static uint32_t tick = 0;
 	++tick;
+
+	const bool doHeavy = gbInForeground || (tick % 8) == 0;
+
+	if (doHeavy)
+	{
+		PulseHighlights();
+		PulseClassFx();
+	}
+
+	PulseUnits();
+
 	if ((tick % 64) == 0)
 		RefreshHighlights();
 	if ((tick % 256) == 0 && s_captureDirty.load(std::memory_order_relaxed))
 		SaveCapture();
 
-	// The ImGui sliders only set a flag; the rebuild does file I/O, so it runs here.
 	if (s_reloadModel.exchange(false) && s_showModel.load(std::memory_order_relaxed))
 	{
 		std::string src, note;
@@ -1512,45 +1769,77 @@ PLUGIN_API void OnPulse()
 	}
 }
 
-// A despawn takes its actor with it, so there is nothing to restore - just
-// drop the entry before the spawn ID gets recycled onto something else.
 PLUGIN_API void OnRemoveSpawn(PlayerClient* pSpawn)
 {
 	if (pSpawn)
 	{
 		OnHighlightSpawnRemoved(pSpawn->SpawnID);
 		OnUnitSpawnRemoved(pSpawn->SpawnID);
+		OnSpellFxSpawnRemoved(pSpawn->SpawnID);
 	}
 }
 
-// Zoning destroys every actor in the old zone. Forget rather than restore:
-// the pointers we would write through are already dead.
+bool ProjectToScreen(float x, float y, float z, float& sx, float& sy)
+{
+	return WorldToScreen(x, y, z, sx, sy);
+}
+
+PLUGIN_API void OnCleanUI()  { eqgfx::ui::NativeUiCleanUI(); }
+
+PLUGIN_API bool OnIncomingChat(const char* Line, DWORD Color)
+{
+	eqgfx::ui::NativeUiIncomingChat(Line, Color);
+	return false;
+}
+
+PLUGIN_API void OnWriteChatColor(const char* Line, int Color, int Filter)
+{
+	(void)Filter;
+	eqgfx::ui::NativeUiWriteChat(Line, Color);
+}
+PLUGIN_API void OnReloadUI() { eqgfx::ui::NativeUiReloadUI(); }
+
 PLUGIN_API void OnBeginZone()
 {
 	ForgetHighlights();
+	eqgfx::unitframes::ForgetUnits();
+	ForgetSpellFx();
+	ForgetNametagBatch();
+	TrimParticleGpu();
+	s_classFxSeen.clear();
 }
 
 PLUGIN_API void InitializePlugin()
 {
 	s_active = true;
 
-	// Safe pre-device: the graphics engine defers device-dependent work and
-	// only fires GraphicsSceneRender once the device is acquired.
 	MQRenderCallbacks callbacks;
 	callbacks.GraphicsSceneRender = OnSceneRender;
-	// The GPU objects are device-dependent: drop them on a reset and let the
-	// next frame rebuild them, or we render with dangling shaders.
-	callbacks.CreateDeviceObjects = []() { /* rebuilt lazily by EnsureInit */ };
-	callbacks.InvalidateDeviceObjects = []() { s_lineFX.ReleaseAll(); };
+	callbacks.CreateDeviceObjects = []() {};
+	callbacks.InvalidateDeviceObjects = []() {
+		s_lineFX.ReleaseDeviceObjects();
+		ReleaseNametagBatchDevice();
+		ReleaseParticleGpuDevice();
+		if (!s_showModel.load(std::memory_order_relaxed))
+			s_modelView.ReleaseAll();
+	};
 	s_renderCallbackId = AddRenderCallbacks(callbacks);
 
-	s_fxStartTime = (double)::GetTickCount64() / 1000.0;
+	s_fxStartTime = SteadySeconds();
+
+	const std::filesystem::path configDir(gPathConfig);
+
+	s_lineFX.SetShaderCacheFile((configDir / "MQEQGFX_shaders.bin").string());
+
+	eqgfx::settings::Global().Open(configDir / "MQEQGFX.json", INIFileName);
 
 	InstallCastTap();
+	LoadGfxSettings();
+	LoadAttackSettings();
+	LoadSpellFxSettings();
+	LoadTargetRingSettings();
 	InitUnits();
-
-	// The damage tap installs lazily from OnPulse; the game offsets are still
-	// null this early and patching a null address crashes on unload.
+	eqgfx::ui::InitNativeUi();
 
 	AddCommand("/eqgfx", EqgfxCommand);
 	AddCommand("/attarget", AtTargetCommand);
@@ -1564,7 +1853,12 @@ PLUGIN_API void ShutdownPlugin()
 	RemoveCommand("/attarget");
 
 	RemoveCastTap();
+	RemoveNametagBatch();
+	RemoveAnimationLod();
+	RemoveParticleGpu();
+	RemoveSelfCastHook();
 	ShutdownUnits();
+	eqgfx::ui::ShutdownNativeUi();
 
 	if (s_renderCallbackId != -1)
 	{
@@ -1572,7 +1866,6 @@ PLUGIN_API void ShutdownPlugin()
 		s_renderCallbackId = -1;
 	}
 
-	// Put every highlighted model back before we go; nothing else will.
 	ClearAllHighlights();
 
 	if (s_captureDirty.load(std::memory_order_relaxed))
@@ -1580,13 +1873,10 @@ PLUGIN_API void ShutdownPlugin()
 	RemoveSwapCapture();
 	RemoveDamageTap();
 
-	{
-		s_back.clear();
-		std::scoped_lock lock(s_sceneMutex);
-		s_front.clear();
-	}
+	ClearScene();
 	{
 		std::scoped_lock lock(s_uiMutex);
+		s_uiNameLists.clear();
 		s_uiNames.clear();
 		s_uiRects.clear();
 	}
@@ -1599,14 +1889,13 @@ PLUGIN_API void ShutdownPlugin()
 		s_dmgEvents.clear();
 	}
 
-	// Safe: the render callback is already removed, DrawPortraits won't run again.
 	{
 		CRenderInterface* render = g_pDrawHandler.get();
 		SGraphicsEngine*  eng = pGraphicsEngine.get();
 		for (int slot = 0; slot < kPortraitSlots; ++slot)
 		{
-			ReleasePreviewActor(slot, render, eng);       // unbind + DestroyActor
-			if (render)
+			ReleasePreviewActor(slot, render, eng);
+			if (render && s_portraitEngine[slot].enabled)
 				render->EnableObjectPreview(false, slot);
 			s_portraitEngine[slot] = PortraitEngineState{};
 		}
@@ -1617,16 +1906,21 @@ PLUGIN_API void ShutdownPlugin()
 			cfg = PortraitConfig{};
 	}
 
-	// GPU effects: the render callback is already removed, so nothing else will
-	// touch these.
 	{
 		std::scoped_lock lock(s_fxMutex);
 		s_fxSubmit.clear();
+		s_fxLua.clear();
 	}
 	s_fxDraw.clear();
 	s_lineFX.ReleaseAll();
 
-	// Model view (render callback + OnUpdateImGui already removed by MQ).
 	s_showModel.store(false);
 	s_modelView.ReleaseAll();
+
+	FlushSpellFxSettings();
+	FlushGfxSettings();
+	FlushAttackSettings();
+	FlushTargetRingSettings();
+	eqgfx::settings::Global().Close();
+	eqgfx::settings::FlushWrites();
 }

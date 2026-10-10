@@ -1,0 +1,187 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B7970F92-A9C5-5AF5-BB8C-1323CEF89AE7}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>MQEQGFX</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <PreBuildEventUseInBuild>true</PreBuildEventUseInBuild>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <PreBuildEventUseInBuild>true</PreBuildEventUseInBuild>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), src\Plugin.props))\src\Plugin.props" Condition=" '$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), src\Plugin.props))' != '' " />
+    <Import Project="$(MSBuildThisFileDirectory)LuaPlugin.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <PreBuildEvent>
+      <Command>if exist "$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), tools\build_scripts\Plugin_Versioning.ps1))\tools\build_scripts\Plugin_Versioning.ps1" powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File "$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), tools\build_scripts\Plugin_Versioning.ps1))\tools\build_scripts\Plugin_Versioning.ps1" -ProjectName "$(MSBuildProjectName)" -ProjectDirectory "$([MSBuild]::EnsureTrailingSlash('$(MSBuildThisFileDirectory)'))\"</Command>
+      <Message>Updating version resource for $(MSBuildProjectName)...</Message>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExceptionHandling>Async</ExceptionHandling>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>zlibd.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExceptionHandling>Async</ExceptionHandling>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>zlib.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.30319.1</_ProjectFileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="src\CombatNumbers.cpp" />
+    <ClCompile Include="src\DebugWindow.cpp" />
+    <ClCompile Include="src\fixes\AnimationLod.cpp" />
+    <ClCompile Include="src\fixes\debugging\ActorAnimationStats.cpp" />
+    <ClCompile Include="src\fixes\debugging\ParticleGpuStats.cpp" />
+    <ClCompile Include="src\fixes\NametagBatch.cpp" />
+    <ClCompile Include="src\fixes\ParticleGpu.cpp" />
+    <ClCompile Include="src\GfxSettings.cpp" />
+    <ClCompile Include="src\gpu\effects\AttackFx.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFx.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxBard.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxBeastlord.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxBerserker.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxCleric.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxDruid.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxEnchanter.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxGeneral.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxLines.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxMage.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxMonk.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxNecromancer.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxPaladin.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxRanger.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxRogue.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxShadowKnight.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxShaman.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxWarrior.cpp" />
+    <ClCompile Include="src\gpu\effects\SpellFxWizard.cpp" />
+    <ClCompile Include="src\gpu\FxCamera.cpp" />
+    <ClCompile Include="src\gpu\FxCatalog.cpp" />
+    <ClCompile Include="src\gpu\Glyphs.cpp" />
+    <ClCompile Include="src\gpu\LineFX.cpp" />
+    <ClCompile Include="src\Highlight.cpp" />
+    <ClCompile Include="src\model\dds.cpp" />
+    <ClCompile Include="src\model\eqg.cpp" />
+    <ClCompile Include="src\model\pfs.cpp" />
+    <ClCompile Include="src\model\render.cpp" />
+    <ClCompile Include="src\model\wld.cpp" />
+    <ClCompile Include="src\Models.cpp" />
+    <ClCompile Include="src\MQEQGFX.cpp" />
+    <ClCompile Include="src\SettingsFile.cpp" />
+    <ClCompile Include="src\Spells.cpp" />
+    <ClCompile Include="src\TargetRing.cpp" />
+    <ClCompile Include="src\ui\Actions.cpp" />
+    <ClCompile Include="src\ui\Canvas.cpp" />
+    <ClCompile Include="src\ui\ChatLog.cpp" />
+    <ClCompile Include="src\ui\ClassProfile.cpp" />
+    <ClCompile Include="src\ui\Controls.cpp" />
+    <ClCompile Include="src\ui\HotButtons.cpp" />
+    <ClCompile Include="src\ui\Layouts.cpp" />
+    <ClCompile Include="src\ui\Skins.cpp" />
+    <ClCompile Include="src\ui\skins\Actions.cpp" />
+    <ClCompile Include="src\ui\skins\Chat.cpp" />
+    <ClCompile Include="src\ui\skins\Collections.cpp" />
+    <ClCompile Include="src\ui\skins\Gems.cpp" />
+    <ClCompile Include="src\ui\skins\Hotbars.cpp" />
+    <ClCompile Include="src\ui\skins\Inventory.cpp" />
+    <ClCompile Include="src\ui\skins\SpellBookWnd.cpp" />
+    <ClCompile Include="src\ui\SpellBook.cpp" />
+    <ClCompile Include="src\ui\Suppress.cpp" />
+    <ClCompile Include="src\ui\UiSettings.cpp" />
+    <ClCompile Include="src\ui\Widgets.cpp" />
+    <ClCompile Include="src\unitframes\FocusWindow.cpp" />
+    <ClCompile Include="src\unitframes\Frame.cpp" />
+    <ClCompile Include="src\unitframes\GroupWindow.cpp" />
+    <ClCompile Include="src\unitframes\Options.cpp" />
+    <ClCompile Include="src\unitframes\PetWindow.cpp" />
+    <ClCompile Include="src\unitframes\PlayerWindow.cpp" />
+    <ClCompile Include="src\unitframes\PluginOptions.cpp" />
+    <ClCompile Include="src\unitframes\RaidWindow.cpp" />
+    <ClCompile Include="src\unitframes\Settings.cpp" />
+    <ClCompile Include="src\unitframes\TargetWindow.cpp" />
+    <ClCompile Include="src\unitframes\UnitWindow.cpp" />
+    <ClCompile Include="src\unitframes\XTargetWindow.cpp" />
+    <ClCompile Include="src\Units.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Detours.h" />
+    <ClInclude Include="src\gpu\effects\SpellFxLooks.h" />
+    <ClInclude Include="src\gpu\FxCamera.h" />
+    <ClInclude Include="src\gpu\FxCatalog.h" />
+    <ClInclude Include="src\gpu\Glyphs.h" />
+    <ClInclude Include="src\gpu\LineFX.h" />
+    <ClInclude Include="src\model\dds.h" />
+    <ClInclude Include="src\model\eqg.h" />
+    <ClInclude Include="src\model\pfs.h" />
+    <ClInclude Include="src\model\render.h" />
+    <ClInclude Include="src\model\wld.h" />
+    <ClInclude Include="src\MQEQGFX.h" />
+    <ClInclude Include="src\PatternScan.h" />
+    <ClInclude Include="src\SettingsFile.h" />
+    <ClInclude Include="src\Signatures.h" />
+    <ClInclude Include="src\ui\Actions.h" />
+    <ClInclude Include="src\ui\ChatLog.h" />
+    <ClInclude Include="src\ui\ClassProfile.h" />
+    <ClInclude Include="src\ui\Controls.h" />
+    <ClInclude Include="src\ui\HotButtons.h" />
+    <ClInclude Include="src\ui\Layouts.h" />
+    <ClInclude Include="src\ui\NativeUi.h" />
+    <ClInclude Include="src\ui\Skins.h" />
+    <ClInclude Include="src\ui\SpellBook.h" />
+    <ClInclude Include="src\ui\Suppress.h" />
+    <ClInclude Include="src\ui\Widgets.h" />
+    <ClInclude Include="src\unitframes\UnitFrames.h" />
+    <ClInclude Include="src\unitframes\UnitWindow.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="MQEQGFX.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="LuaPlugin.props" />
+    <None Include="vcpkg_mq.txt" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

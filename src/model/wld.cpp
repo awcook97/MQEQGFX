@@ -9,7 +9,6 @@ namespace eqgfx::wld {
 
 namespace {
 
-// String-hash XOR cipher (constant across all WLD files).
 const uint8_t kKey[8] = { 0x95, 0x3A, 0xC5, 0x2A, 0x95, 0x7A, 0x95, 0x6A };
 
 uint32_t ru32(const uint8_t* b, size_t o) { uint32_t v; std::memcpy(&v, b + o, 4); return v; }
@@ -21,7 +20,6 @@ int8_t   ri8(const uint8_t* b, size_t o)  { return static_cast<int8_t>(b[o]); }
 
 struct Frag { uint32_t id; const uint8_t* d; uint32_t sz; };
 
-// A bone's accumulated bind-pose transform in model space: world = R * local + T.
 struct Bone { float R[9]; float T[3]; std::string name; };
 
 void matmul(const float A[9], const float B[9], float out[9])
@@ -49,6 +47,7 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 {
 	out = eqg::Model{};
 	for (int i = 0; i < 3; ++i) { out.minB[i] = FLT_MAX; out.maxB[i] = -FLT_MAX; }
+	if (outHeadBone) *outHeadBone = BoneXform{};
 
 	if (size < 28) { err = "truncated WLD header"; return false; }
 	if (ru32(data, 0) != 0x54503D02u) { err = "not a WLD file"; return false; }
@@ -63,14 +62,13 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 
 	auto getName = [&](int32_t ref) -> std::string {
 		if (ref >= 0) return std::string();
-		size_t off = static_cast<size_t>(-ref);
+		size_t off = 0u - static_cast<uint32_t>(ref);
 		if (off >= sh.size()) return std::string();
 		size_t e = off;
 		while (e < sh.size() && sh[e] != '\0') ++e;
 		return std::string(&sh[off], e - off);
 	};
 
-	// Index fragments (1-based; entry 0 is a sentinel so positive refs index directly).
 	std::vector<Frag> frags;
 	frags.push_back({ 0, nullptr, 0 });
 	size_t p = 28 + strHashSize;
@@ -86,11 +84,7 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 
 	const std::string code = upper(raceCode);
 
-	// ---- Skeleton (0x10 HierarchicalSpriteDef): bone tree + per-bone bind pose ----
-	// WLD character mesh vertices are in BONE-LOCAL space; we must apply each bone's
-	// accumulated bind transform to assemble the standing (T-pose) figure. Verified
-	// offline: without this the mesh is a collapsed blob; with it, a clean humanoid.
-	std::vector<Bone> bones;   // indexed by dag order (matches vertexPiece bone index)
+	std::vector<Bone> bones;
 	{
 		uint32_t skelRef = 0;
 		for (size_t i = 1; i < frags.size(); ++i)
@@ -105,9 +99,9 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 			const Frag& sf = frags[skelRef];
 			uint32_t flags   = ru32(sf.d, 4);
 			int32_t  numDags = ri32(sf.d, 8);
-			size_t o = 12 + 4;                      // + collisionVolumeRef
-			if (flags & 0x1) o += 12;               // params1[3]
-			if (flags & 0x2) o += 4;                // params2 (float)
+			size_t o = 12 + 4;
+			if (flags & 0x1) o += 12;
+			if (flags & 0x2) o += 4;
 
 			struct Dag { int32_t trackRef; std::string name; std::vector<int32_t> kids; };
 			std::vector<Dag> dags;
@@ -136,7 +130,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 					for (int k : dags[b].kids)
 						if (k >= 0 && static_cast<size_t>(k) < dags.size()) parent[k] = static_cast<int>(b);
 
-				// Local bind transform from the bone's 0x13 track -> 0x12 def frame 0.
 				auto localBind = [&](int32_t trackRef, float R[9], float T[3]) {
 					R[0] = R[4] = R[8] = 1; R[1] = R[2] = R[3] = R[5] = R[6] = R[7] = 0;
 					T[0] = T[1] = T[2] = 0;
@@ -165,16 +158,14 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 
 				bones.resize(dags.size());
 				out.skeleton.assign(dags.size(), eqg::Bone{});
-				std::vector<bool> done(dags.size(), false);
-				// Forward kinematics: process parents before children.
+				std::vector<bool> queued(dags.size(), false);
 				std::vector<int> order; order.reserve(dags.size());
-				for (size_t b = 0; b < dags.size(); ++b) if (parent[b] == -1) order.push_back(static_cast<int>(b));
+				for (size_t b = 0; b < dags.size(); ++b) if (parent[b] == -1) { order.push_back(static_cast<int>(b)); queued[b] = true; }
 				for (size_t qi = 0; qi < order.size(); ++qi)
 				{
 					int b = order[qi];
 					float lR[9], lT[3];
 					localBind(dags[b].trackRef, lR, lT);
-					// Store the bind-pose LOCAL transform + parent for re-posing.
 					eqg::Bone& sb = out.skeleton[b];
 					sb.parent = parent[b];
 					std::memcpy(sb.localR, lR, sizeof(lR));
@@ -195,19 +186,12 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 						bones[b].T[2] = rt[2] + pb.T[2];
 					}
 					bones[b].name = dags[b].name;
-					done[b] = true;
 					for (int k : dags[b].kids)
-						if (k >= 0 && static_cast<size_t>(k) < dags.size() && !done[k]) order.push_back(k);
+						if (k >= 0 && static_cast<size_t>(k) < dags.size() && !queued[k]) { queued[k] = true; order.push_back(k); }
 				}
 			}
 		}
 
-		// Locate the head-attach bone so a separately-authored worn head (HAFHE00..03)
-		// grafts at the neck, NOT the top of the skull. The canonical head bone is
-		// "<code>HE_DAG" (old models, e.g. HAFHE) or "<code>HEHEAD_DAG" (Luclin) - match
-		// the stripped name EXACTLY so we don't grab "<code>HEAD_POINT_DAG" (a hair/top
-		// point, ~0.4 higher) or the hair bones. Fall back to a "HEAD"(-not-POINT) name,
-		// then the topmost bone.
 		if (outHeadBone)
 		{
 			auto stripped = [&](size_t b) -> std::string {
@@ -244,7 +228,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		}
 	}
 
-	// 0x03 BitmapName -> texture filename (name string is XOR-encoded like the hash).
 	auto texFromFrag03 = [&](uint32_t ref) -> std::string {
 		if (ref == 0 || ref >= frags.size() || frags[ref].id != 0x03) return std::string();
 		const Frag& f = frags[ref];
@@ -257,12 +240,11 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		return s;
 	};
 
-	// 0x05 SimpleSpriteInst -> 0x04 SimpleSpriteDef -> first 0x03 BitmapName.
 	auto texFromFrag05 = [&](int32_t ref05) -> std::string {
 		if (ref05 <= 0 || static_cast<uint32_t>(ref05) >= frags.size()) return std::string();
 		const Frag& f5 = frags[ref05];
 		if (f5.id != 0x05 || f5.sz < 8) return std::string();
-		for (size_t co = 0; co < 8; co += 4)   // nameRef or the 0x04 ref
+		for (size_t co = 0; co < 8; co += 4)
 		{
 			int32_t cand = ri32(f5.d, co);
 			if (cand <= 0 || static_cast<uint32_t>(cand) >= frags.size() || frags[cand].id != 0x04) continue;
@@ -280,10 +262,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		return std::string();
 	};
 
-	// Resolve a 0x31 MaterialList, APPENDING its materials to out.materials; returns
-	// the base index they start at so the referencing mesh's group matidx offsets
-	// into it. Each 0x36 owns its list - appending keeps body/eye/head materials
-	// distinct (a shared list just duplicates harmlessly).
 	auto resolveMaterials = [&](uint32_t listRef) -> int {
 		int base = static_cast<int>(out.materials.size());
 		if (listRef == 0 || listRef >= frags.size()) return base;
@@ -307,8 +285,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		return base;
 	};
 
-	// Parse + merge one 0x36 DmSpriteDef mesh into out, assembling bind pose via the
-	// skeleton (each vertex is rigid-skinned to exactly one bone by vertexPieces).
 	auto addMesh = [&](const Frag& f) -> bool {
 		const uint8_t* d = f.d;
 		if (f.sz < 24 + 12 + 12 + 4 + 24 + 20) return false;
@@ -325,6 +301,7 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		uint16_t ptc = ru16(d, o + 12);
 		int16_t  rawScale = ri16(d, o + 18);
 		o += 20;
+		if (rawScale < 0 || rawScale > 30) return false;
 		float scale = 1.0f / static_cast<float>(1 << rawScale);
 
 		size_t vptr  = o;
@@ -338,7 +315,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 
 		int matBase = resolveMaterials(static_cast<uint32_t>(matListRef));
 
-		// Per-vertex bone index from the vertexPiece runs (count, boneIdx).
 		std::vector<int> vbone(vc, -1);
 		{
 			uint32_t vi = 0;
@@ -361,8 +337,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 				const uint8_t* nq = d + nptr + static_cast<size_t>(i) * 3;
 				ln[0] = ri8(nq, 0) / 127.0f; ln[1] = ri8(nq, 1) / 127.0f; ln[2] = ri8(nq, 2) / 127.0f;
 			}
-			// Keep the BONE-LOCAL vert (for re-skinning) and also bake the bind-pose
-			// world vert (for the default render). uv is shared.
 			float u = 0, v = 0;
 			if (i < tc)
 			{
@@ -378,7 +352,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 			out.localVertices.push_back(loc);
 			out.vertexBone.push_back(b);
 
-			// Apply the bind-pose bone transform (assembled model space, Z-up).
 			if (b >= 0 && static_cast<size_t>(b) < bones.size())
 			{
 				float wp[3]; matvec(bones[b].R, lp, wp);
@@ -399,8 +372,6 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 			}
 		}
 
-		// polyTex groups tile the polygon list in order: first g.count polys use
-		// material g.matidx, and so on. One SubMesh per group.
 		uint16_t polyCursor = 0;
 		for (uint16_t g = 0; g < ptc; ++g)
 		{
@@ -425,11 +396,7 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		return true;
 	};
 
-	// Merge every 0x36 mesh whose name starts with the race code (body + eyes), but
-	// SKIP the separately-authored worn-head variants <code>HE00.._DMSPRITEDEF - the
-	// worn head (hair/helm) is grafted from the live capture via MergeHeadMesh, not
-	// merged into the body. (global_chr.wld holds the body AND all head variants.)
-	const std::string hePrefix = code + "HE";   // e.g. "HAFHE"
+	const std::string hePrefix = code + "HE";
 	int meshCount = 0;
 	for (size_t i = 1; i < frags.size(); ++i)
 	{
@@ -438,13 +405,14 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 		std::string un = upper(nm);
 		if (un.compare(0, code.size(), code) != 0) continue;
 		if (un.size() > hePrefix.size() && un.compare(0, hePrefix.size(), hePrefix) == 0
-			&& un[hePrefix.size()] >= '0' && un[hePrefix.size()] <= '9') continue;   // HAFHE0x head
+			&& un[hePrefix.size()] >= '0' && un[hePrefix.size()] <= '9') continue;
 		if (addMesh(frags[i])) ++meshCount;
 	}
 
 	if (meshCount == 0 || out.vertices.empty())
 	{
 		err = "no matching 0x36 mesh for race '" + raceCode + "'";
+		if (outHeadBone) *outHeadBone = BoneXform{};
 		return false;
 	}
 	out.boneCount = static_cast<int>(bones.size());
@@ -457,8 +425,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 {
 	if (!head.valid) { err = "no head bone"; return false; }
 
-	// User seat-tweak rotation applied in head-local space (yaw about local Z = the
-	// neck axis, pitch about X, roll about Y), composed as Rz*Rx*Ry.
 	float cYaw = std::cos(adjYaw), sYaw = std::sin(adjYaw);
 	float cPit = std::cos(adjPitch), sPit = std::sin(adjPitch);
 	float cRol = std::cos(adjRoll), sRol = std::sin(adjRoll);
@@ -467,7 +433,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	float Ry[9] = { cRol, 0, sRol,  0, 1, 0,  -sRol, 0, cRol };
 	float Rzx[9]; matmul(Rz, Rx, Rzx);
 	float adjR[9]; matmul(Rzx, Ry, adjR);
-	// Full head rotation = boneR * adjR (adjR first, in local space).
 	float R[9]; matmul(head.R, adjR, R);
 	if (size < 28 || ru32(data, 0) != 0x54503D02u) { err = "not a WLD file"; return false; }
 	uint32_t version     = ru32(data, 4);
@@ -480,7 +445,7 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	for (size_t i = 0; i < sh.size(); ++i) sh[i] = static_cast<char>(sh[i] ^ kKey[i & 7]);
 	auto getName = [&](int32_t ref) -> std::string {
 		if (ref >= 0) return std::string();
-		size_t off = static_cast<size_t>(-ref);
+		size_t off = 0u - static_cast<uint32_t>(ref);
 		if (off >= sh.size()) return std::string();
 		size_t e = off; while (e < sh.size() && sh[e] != '\0') ++e;
 		return std::string(&sh[off], e - off);
@@ -532,8 +497,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 		return std::string();
 	};
 
-	// Find the requested head mesh. Callers pass either the bare tag ("HAFHE03") or
-	// the full sprite name ("HAFHE03_DMSPRITEDEF") - match by PREFIX so both work.
 	const std::string want = upper(meshName);
 	size_t mi = 0;
 	for (size_t i = 1; i < frags.size(); ++i)
@@ -559,6 +522,7 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	uint16_t ptc = ru16(d, o + 12);
 	int16_t  rawScale = ri16(d, o + 18);
 	o += 20;
+	if (rawScale < 0 || rawScale > 30) { err = "head mesh bad scale"; return false; }
 	float scale = 1.0f / static_cast<float>(1 << rawScale);
 
 	size_t vptr  = o;
@@ -570,7 +534,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	size_t gptr  = vpptr + static_cast<size_t>(vpc) * 4;
 	if (gptr + static_cast<size_t>(ptc) * 4 > f.sz) { err = "head mesh overrun"; return false; }
 
-	// Append the head's own materials (offset the mesh's group matidx into them).
 	int matBase = static_cast<int>(out.materials.size());
 	if (matListRef > 0 && static_cast<uint32_t>(matListRef) < frags.size() && frags[matListRef].id == 0x31)
 	{
@@ -592,10 +555,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 		}
 	}
 
-	// Rigid head skinned to the head bone: world = head.R * (adjR * v) + head.T + dz.
-	// The head-bone-LOCAL vert (for re-posing) is adjR*v + head.R^T*(0,0,dz) so that
-	// skinning by the head bone's bind transform reproduces this exact world vert AND
-	// the head follows when that bone is posed.
 	float dzOff[3] = { head.R[6] * dz, head.R[7] * dz, head.R[8] * dz };
 	uint32_t base = static_cast<uint32_t>(out.vertices.size());
 	for (uint16_t i = 0; i < vc; ++i)
@@ -615,7 +574,6 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 			if (newWorld) { u = ri32(tq, 0) / 256.0f; v = ri32(tq, 4) / 256.0f; }
 			else          { u = ri16(tq, 0) / 256.0f; v = ri16(tq, 2) / 256.0f; }
 		}
-		// head-bone-local vert (adjustment applied, dz in local frame)
 		float alp[3]; matvec(adjR, lp, alp);
 		float aln[3]; matvec(adjR, ln, aln);
 		eqg::Vertex loc{};

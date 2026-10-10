@@ -1,55 +1,18 @@
 ---@module 'lwlogger'
---- A lightweight logger you can require and use at your convenience. Output goes
---- to the MQ console (color codes interpreted) and, optionally, to a file.
----
----@usage
----     local logger = require('eqgfx.lib.lwlogger')   -- or 'lib.lwlogger' in your own project
----
----     logger.SetAppName("My Application")
----     logger.SetModuleName("Module For Application")
----     logger.SetLevel(logger.INFO)                   -- or "INFO"
----     logger.SetColors(true)                         -- true | false | 'Full'
----                                                    -- | 'AppName' | 'ModuleName' | 'Level'
----                                                    -- | 'Time' | 'Character'
----                                                    -- | 'Variables' | 'MulticoloredVariables'
----     logger.SetIncludeTime('seconds')               -- true|false | 'hours'|'minutes'|'seconds'
----                                                    -- | 'deciseconds'|'centiseconds'|'milliseconds'
----     logger.SetIncludeCharacter(true)               -- true|false | 'Character' | 'Server.Character'
----                                                    -- | 'Server.Character.Zone' | 'Character.Zone'
----     logger.SetIncludeSource('trace')               -- false|true | 'trace' | 'short' | 'full'
----                                                    -- ('trace' = show file:line only at TRACE level; the default)
----     logger.SetOutputFile(true)                     -- true|false | "/path/to/file.log"
----
----     ---@param varA string # Some string variable
----     local function someFunction(varA)
----         logger.Trace("fn someFunction | varA: %s", varA)
----         logger.Debug("more detail: %d", 42)
----         logger.Info("Casting: %s", "Some Spell")
----         logger.Warn("low on mana (%d%%)", 12)
----         logger.Error("init failed: %s", err)
----         logger.Fatal("unrecoverable")
----     end
----
----     -- logger.Raw("...")  prints a prefix-less line (handy for aligned dumps).
 
 local mq = require('mq')
 local os = require('os')
 
--- Resolve our sibling COLORS module no matter where this package is dropped.
--- `...` is the module name Lua passed us (e.g. 'eqgfx.lib.lwlogger').
 local modname = ...
 local COLORS  = require((modname and (modname .. '.COLORS')) or 'COLORS')
 
--- Our own chunk source, so we can skip lwlogger frames when finding the caller.
 local SELF_SRC = debug.getinfo(1, 'S').source
 
--- Level constants (ascending severity). OFF silences everything.
 ---@enum lwlogger.Level
 local LEVEL = {
   TRACE = 1, DEBUG = 2, INFO = 3, WARN = 4, ERROR = 5, FATAL = 6, OFF = 99,
 }
 
---- A level passed by name instead of constant.
 ---@alias lwlogger.LevelName
 ---| '"TRACE"'
 ---| '"DEBUG"'
@@ -59,8 +22,6 @@ local LEVEL = {
 ---| '"FATAL"'
 ---| '"OFF"'
 
---- Accepted by `SetColors`. `true`/`'Full'` color everything; `false` nothing;
---- any other selects ONLY the named pieces.
 ---@alias lwlogger.ColorOption
 ---| '"Full"'
 ---| '"AppName"'    | '"App"'
@@ -72,7 +33,6 @@ local LEVEL = {
 ---| '"Variables"'  | '"Vars"' | '"Variable"'
 ---| '"MulticoloredVariables"' | '"MultiVars"'
 
---- Timestamp granularity for `SetIncludeTime`.
 ---@alias lwlogger.TimePrecision
 ---| '"hours"'
 ---| '"minutes"'
@@ -81,26 +41,18 @@ local LEVEL = {
 ---| '"centiseconds"'
 ---| '"milliseconds"'
 
---- Character identifier shape for `SetIncludeCharacter`.
 ---@alias lwlogger.CharacterFormat
 ---| '"Character"'
 ---| '"Server.Character"'
 ---| '"Server.Character.Zone"'
 ---| '"Character.Zone"'
 
---- When to append the caller's `file:line` to a log line (`SetIncludeSource`):
----   false   -> never
----   true    -> always, basename:line
----   'trace' -> only while the active level is TRACE (the default)
----   'short' -> always, basename:line (same as true)
----   'full'  -> always, full path:line
 ---@alias lwlogger.SourceMode
 ---| boolean
 ---| '"trace"'
 ---| '"short"'
 ---| '"full"'
 
---- Per-piece on/off flags for coloring (mirrors `lwlogger.ColorOption`).
 ---@class lwlogger.ColorScope
 ---@field app       boolean
 ---@field module    boolean
@@ -111,7 +63,6 @@ local LEVEL = {
 ---@field var       boolean
 ---@field multivar  boolean
 
---- Internal mutable state, one instance per Lua VM (per `/lua run`).
 ---@class lwlogger.State
 ---@field appName       string?
 ---@field moduleName    string?
@@ -151,27 +102,21 @@ local LEVEL_LABEL = { [1] = 'TRACE', [2] = 'DEBUG', [3] = 'INFO',
 local LEVEL_ROLE  = { [1] = 'trace', [2] = 'debug', [3] = 'info',
                       [4] = 'warn',  [5] = 'error', [6] = 'fatal' }
 
--- All logger state lives here. One instance per Lua VM (per `/lua run`).
 ---@type lwlogger.State
 local state = {
   appName       = nil,
   moduleName    = nil,
   level         = M.INFO,
   useColor      = true,
-  -- which prefix/message pieces get colored when useColor is on:
   scope         = { app = true, module = true, level = true, time = true,
                     character = true, source = true, var = false, multivar = false },
-  includeTime   = false,    -- false | precision string
-  character     = false,    -- false | character-format string
-  includeSource = 'trace',  -- show file:line automatically while at TRACE level
-  outFile       = nil,      -- nil | path string
+  includeTime   = false,
+  character     = false,
+  includeSource = 'trace',
+  outFile       = nil,
 }
 
 M.ColorStrength = state.scope
-
--- ---------------------------------------------------------------------------
--- Configuration
--- ---------------------------------------------------------------------------
 
 ---@param name string?
 function M.SetAppName(name) state.appName = name and tostring(name) or nil end
@@ -179,7 +124,6 @@ function M.SetAppName(name) state.appName = name and tostring(name) or nil end
 ---@param name string?
 function M.SetModuleName(name) state.moduleName = name and tostring(name) or nil end
 
---- Set the minimum level that will be emitted.
 ---@param level lwlogger.Level|lwlogger.LevelName  # e.g. logger.INFO or "INFO"
 function M.SetLevel(level)
   if type(level) == 'string' then
@@ -189,7 +133,6 @@ function M.SetLevel(level)
   end
 end
 
---- A settable flag inside `lwlogger.ColorScope`.
 ---@alias lwlogger.ScopeKey
 ---| '"app"'
 ---| '"module"'
@@ -200,7 +143,6 @@ end
 ---| '"var"'
 ---| '"multivar"'
 
--- 'AppName' | 'ModuleName' | ... -> internal scope key
 ---@type table<lwlogger.ColorOption, lwlogger.ScopeKey>
 local SCOPE_ALIAS = {
   AppName = 'app', App = 'app',
@@ -213,10 +155,6 @@ local SCOPE_ALIAS = {
   MulticoloredVariables = 'multivar', MultiVars = 'multivar',
 }
 
---- Control coloring.
----   SetColors(true) / SetColors('Full')  -> color everything
----   SetColors(false)                     -> no color
----   SetColors('AppName', 'Time', ...)    -> color ONLY the named pieces
 ---@param ... boolean|lwlogger.ColorOption
 function M.SetColors(...)
   local args = { ... }
@@ -231,11 +169,10 @@ function M.SetColors(...)
   if first == true or first == 'Full' then
     state.useColor = true
     for k in pairs(state.scope) do state.scope[k] = true end
-    state.scope.multivar = false        -- mutually exclusive with single-color vars
+    state.scope.multivar = false
     return
   end
 
-  -- Explicit list: enable color, turn on only the named pieces.
   state.useColor = true
   for k in pairs(state.scope) do state.scope[k] = false end
   for _, a in ipairs(args) do
@@ -253,7 +190,6 @@ local TIME_PRECISION = {
   deciseconds = true, centiseconds = true, milliseconds = true,
 }
 
---- Include a timestamp in the prefix.
 ---@param v boolean|lwlogger.TimePrecision  # true => 'seconds'; false => off
 function M.SetIncludeTime(v)
   if v == false then
@@ -264,14 +200,13 @@ function M.SetIncludeTime(v)
     state.includeTime = v --[[@as lwlogger.TimePrecision]]
   end
 end
-M.SetIncludetime = M.SetIncludeTime     -- accept the lowercase spelling too
+M.SetIncludetime = M.SetIncludeTime
 
 local CHAR_MODE = {
   ['Character'] = true, ['Server.Character'] = true,
   ['Server.Character.Zone'] = true, ['Character.Zone'] = true,
 }
 
---- Include the active character (and optionally server/zone) in the prefix.
 ---@param v boolean|lwlogger.CharacterFormat  # true => 'Character'; false => off
 function M.SetIncludeCharacter(v)
   if v == false then
@@ -283,8 +218,6 @@ function M.SetIncludeCharacter(v)
   end
 end
 
---- Append the caller's source `file:line` to each line. Defaults to 'trace'
---- (shown only while the active level is TRACE).
 ---@param v lwlogger.SourceMode
 function M.SetIncludeSource(v)
   if v == false or v == true or v == 'trace' or v == 'short' or v == 'full' then
@@ -292,7 +225,6 @@ function M.SetIncludeSource(v)
   end
 end
 
---- Mirror output to a file (plain text, color codes stripped).
 ---@param v boolean|string  # true => "<AppName>.log"; or a path; false => off
 function M.SetOutputFile(v)
   if v == false then
@@ -305,23 +237,13 @@ function M.SetOutputFile(v)
   end
 end
 
---- Override role colors, e.g. SetColorScheme{ app='cyan', warn='o' }.
 M.SetColorScheme = COLORS.SetColorRules
 
--- ---------------------------------------------------------------------------
--- Prefix pieces
--- ---------------------------------------------------------------------------
-
--- Sub-second fraction (0..999 ms). Prefer MQ's millisecond clock; fall back to
--- fractional CPU time (not wall-aligned, but fine for log ordering).
 ---@return integer
 local function millis()
-  local ok, t = pcall(function() return mq.gettime() end)
-  if ok and type(t) == 'number' then return math.floor(t % 1000) end
-  return math.floor((os.clock() % 1) * 1000)
+  return math.floor(mq.gettime() % 1000)
 end
 
---- The timestamp segment text, or nil when timestamps are disabled.
 ---@return string?
 local function time_string()
   local p = state.includeTime
@@ -338,7 +260,6 @@ local function time_string()
   return base
 end
 
---- The character segment text, or nil when disabled.
 ---@return string?
 local function character_string()
   local mode = state.character
@@ -357,17 +278,14 @@ local function character_string()
   else                                     return me end
 end
 
--- Is the source segment wanted for the message currently being built?
 ---@return boolean
 local function source_wanted()
   local m = state.includeSource
   if not m then return false end
   if m == 'trace' then return state.level == M.TRACE end
-  return true     -- true | 'short' | 'full'
+  return true
 end
 
--- "file:line" of the first stack frame outside this module, or nil. `full`
--- keeps the whole path; otherwise just the basename.
 ---@param full boolean
 ---@return string?
 local function caller_location(full)
@@ -383,7 +301,6 @@ local function caller_location(full)
   return nil
 end
 
--- Build one "[text]" segment, coloring the inner text if asked.
 ---@param role    lwlogger.Role
 ---@param text    string
 ---@param colored boolean?
@@ -393,14 +310,18 @@ local function seg(role, text, colored)
   return '[' .. text .. ']'
 end
 
--- ---------------------------------------------------------------------------
--- Output
--- ---------------------------------------------------------------------------
+local MAX_LOG_BYTES = 1048576
 
 ---@param plainLine string
 local function append_file(plainLine)
   if not state.outFile then return end
   local f = io.open(state.outFile, 'a')
+  if f and (f:seek('end') or 0) > MAX_LOG_BYTES then
+    f:close()
+    os.remove(state.outFile .. '.old')
+    os.rename(state.outFile, state.outFile .. '.old')
+    f = io.open(state.outFile, 'a')
+  end
   if f then
     local stamp = tostring(os.date('%Y-%m-%d %H:%M:%S'))
     f:write(stamp, ' ', plainLine, '\n')
@@ -408,7 +329,6 @@ local function append_file(plainLine)
   end
 end
 
---- Format `fmt` with its args, applying variable coloring when enabled.
 ---@param fmt any
 ---@param ... any
 ---@return string
@@ -421,7 +341,6 @@ local function format_msg(fmt, ...)
   return ok and s or tostring(fmt)
 end
 
---- Emit a message at `level`. Usually called via Trace/Debug/Info/... below.
 ---@param level lwlogger.Level
 ---@param fmt   string
 ---@param ...   any
@@ -451,11 +370,10 @@ function M.log(level, fmt, ...)
   if ch then parts[#parts + 1] = seg('character', ch, colorOn and state.scope.character) end
 
   local line = table.concat(parts) .. ' ' .. msg
-  print(line)                              -- MQ console interprets \a color codes
+  print(line)
   append_file(COLORS.strip(line))
 end
 
---- Print a prefix-less line (no brackets/level). Useful for aligned dumps.
 ---@param fmt string
 ---@param ... any
 function M.Raw(fmt, ...)
@@ -463,8 +381,6 @@ function M.Raw(fmt, ...)
   print(msg)
   append_file(COLORS.strip(msg))
 end
-
--- Per-level convenience functions: logger.Info("fmt", ...) etc.
 
 ---@param fmt string  # printf-style format
 ---@param ... any     # format arguments

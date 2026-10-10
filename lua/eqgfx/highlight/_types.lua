@@ -1,15 +1,3 @@
---[[
-  highlight/_types.lua - types, roles and shared tables for the target
-  highlighting and role marker feature.
-
-  The config classes describe the tree in settings.lua; colors live there as
-  {r,g,b,a} floats 0..1 so the menu's ColorEdit4 binds straight to them, and
-  init.lua packs them into the ARGB integers the plugin wants at draw time.
-]]
-
---- What a spawn is being lit up *for*. Mutually exclusive, and resolved in the
---- order `classify()` in init.lua checks them - assistTarget first, so "the MA
---- is on it" outranks what the spawn actually is.
 ---@alias HighlightRole
 ---| '"assistTarget"' # the raid/group main assist is on it
 ---| '"pc"'           # player character
@@ -17,7 +5,6 @@
 ---| '"hostile"'      # NPC that is currently aggressive
 ---| '"neutral"'      # NPC that is not
 
---- A role marker's look.
 ---@class MarkerStyle
 ---@field color RGBA
 ---@field radius number    # base radius, world units
@@ -49,7 +36,6 @@
 ---@field maxSpawns integer
 ---@field losOnly boolean
 ---@field includePCs boolean
----@field nearestFirst boolean
 ---@field radius3d number     # effect radius (kept apart from the scan radius)
 ---@field height number
 ---@field speed number
@@ -92,11 +78,9 @@
 
 local M = {}
 
---- Spawn.Type strings we treat as a player character.
 ---@type table<string, boolean>
 M.PlayerTypes = { PC = true, Mercenary = true }
 
---- Menu ordering + labels for the per-role tint colors.
 ---@type { key: HighlightRole, label: string, hint: string }[]
 M.RoleRows = {
 	{ key = 'assistTarget', label = 'Main assist target', hint = 'what the MA is on - outranks the rest' },
@@ -106,7 +90,6 @@ M.RoleRows = {
 	{ key = 'neutral',      label = 'NPC (idle)',         hint = 'everything else' },
 }
 
---- eqgfx.highlight() mode bitmask, for the menu's radio group.
 ---@type { value: integer, label: string, hint: string }[]
 M.Modes = {
 	{ value = 1, label = 'Tint only',   hint = 'multiply the color into every material' },

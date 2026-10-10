@@ -1,8 +1,3 @@
---[[
-  indicators/_types.lua - types and target-type category sets for the
-  AE caster indicator feature.
-]]
-
 local core = require('eqgfx.core._types')
 
 ---@class ActiveCast
@@ -47,8 +42,6 @@ local core = require('eqgfx.core._types')
 
 local T = {}
 
--- The category sets live in core/_types.lua (shared with the nameplates AE
--- cast highlight); these aliases keep the established local names.
 T.CASTER_CENTERED = core.CasterCentered
 T.TARGET_CENTERED = core.TargetCentered
 

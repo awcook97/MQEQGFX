@@ -1,54 +1,3 @@
---[[
-  nameplates/init.lua - custom nameplates: animated HP bar + name + cast bar.
-
-  Projection: native eqgfx world->screen.
-  Drawing:    MQ ImGui foreground draw list - smooth, no flicker.
-
-  Positions are read LIVE every frame in the draw callback (frame-accurate, so
-  plates stick to spawns as you/they move). A slow loop only decides which
-  spawns get plates (range/NPC filter) and prunes ones that leave.
-
-  Cast bars: your own casts via Me.Casting; other spawns via the shared
-  eqgfx.casts tracker ("begins to cast" chat events + Spell.CastTime), since
-  Spawn.Casting is only accurate for yourself.
-
-  Buffs: read from MQ's cached buffs (Spawn.CachedBuff - populated once
-  you've targeted a spawn), shown as icon rows whose side/stacking direction
-  is configurable per category (beneficial / detrimental).
-
-  Plates render inside a fullscreen pass-through ImGui window pinned to the
-  back of the window stack, so they stay UNDER other ImGui windows (consoles,
-  menus). EQ's own UI windows are drawn by the game before MQ's overlay and
-  cannot be layered above ImGui from Lua - so plates that overlap a native
-  window are CLIPPED around its rect (default) or hidden whole, using each
-  plate's measured footprint from the previous frame (plate.ext).
-
-  AE cast highlight: every in-flight area cast (mine, other players', NPCs')
-  marks the plates it will affect - detrimental marks the caster's enemies
-  in cfg.colors.aeDet, beneficial marks its allies in aeBen - and overlapping
-  areas deepen the highlight (stack alpha curve). nameplates/ae.lua owns the
-  area math; the per-plate counting lives in draw_plates.
-
-  Line of sight: the slow loop can drop spawns you can't actually see, with
-  per-category exemptions (group, raid, extended targets, pet, fellowship,
-  target) for the ones you track precisely because they're out of sight. The
-  raycast answer is cached per spawn for cfg.los.interval seconds.
-
-  Crowds: plates shrink with distance (cfg.distScale) and, when several land
-  on top of each other, either push apart or collapse into one column per
-  cluster (cfg.overlap). Both write per-plate state the renderer applies;
-  your own plate and your target's are never displaced.
-
-  Clicking a plate targets its spawn when cfg.clickTarget is on, and drawing
-  pauses entirely while EQ is backgrounded or not rendering (cfg.pause).
-
-  Run:  /lua run eqgfx/nameplates
-  Stop: /lua stop eqgfx/nameplates
-  Opts: /npmenu       in-game customization window (auto-saved settings)
-        /npradius N   range filter
-        /nppcs        toggle PC plates
-]]
-
 local mq    = require('mq')
 local eqgfx = require('eqgfx')
 local ImGui = require('ImGui')
@@ -73,11 +22,10 @@ log.SetIncludeTime('milliseconds')
 log.SetLevel(log.INFO)
 log.SetOutputFile(mq.configDir .. '/eqgfx.log')
 
+pause.wait_for_game()
+
 local ok, err = eqgfx.init()
 if not ok then log.Error('init failed: %s', err) return end
-if eqgfx.dll_stale then
-  log.Warn('eqgfx.dll on disk is newer than the one loaded in this game session - restart EQ to load it (native UI occlusion disabled until then)')
-end
 
 settings.load()
 local bootCfg = settings.data or {}
@@ -91,57 +39,28 @@ local plates = {}
 ---@type table<integer, { at: number, ok: boolean }>
 local losCache = {}
 
-----------------------------------------------------------------------------
--- Native EQ UI occlusion - NATIVE ONLY. The compiled scan (named exports,
--- full window list per call) is the single source of occluder rects. There
--- is NO Lua-side window sweep: a TLO fallback was measured stalling the
--- script loop for hundreds of ms per pass, which starved mq.doevents() and
--- lagged cast detection by seconds. If the loaded eqgfx.dll can't do the
--- native scan, occlusion is OFF and we say so loudly - the loop stays fast.
-----------------------------------------------------------------------------
 local uiRects = {}
-local showUiRects = false      -- /npui show: visualize detected occluders
-local nativeWarned = false
+local showUiRects = false
 
---- Refresh the occluder rect cache from the native scan; optionally fill
---- `names` with a printable line per rect (for /npui and /npdebug).
 ---@param names string[]|nil # out-param: human-readable rect descriptions
 local function scan_ui_rects(names)
-  local nrects, native = uirects.get()
-  if native then
-    uiRects = nrects
-    if names then
-      for idx, rect in ipairs(nrects) do
-        names[idx] = string.format('%s %d,%d %dx%d', rect.name or 'rect',
-                                   rect[1], rect[2],
-                                   rect[3] - rect[1], rect[4] - rect[2])
-      end
-      if #nrects == 0 then names[1] = '(native: no visible windows)' end
+  uiRects = uirects.get()
+  if names then
+    for idx, rect in ipairs(uiRects) do
+      names[idx] = string.format('%s %d,%d %dx%d', rect.name or 'rect',
+                                 rect[1], rect[2],
+                                 rect[3] - rect[1], rect[4] - rect[2])
     end
-    return
-  end
-
-  uiRects = {}
-  if names then names[1] = '(native scan unavailable - occlusion OFF)' end
-  if not nativeWarned then
-    nativeWarned = true
-    log.Error('native UI scan unavailable')
   end
 end
 
-local PAD = 12   -- occlusion bbox slack: glow rings, bob, buff appear-flash growth
+local PAD = 12
 
---- Per-plate native-UI occlusion. The plate's bbox is its measured footprint
---- from the previous frame (plate.ext, recorded by render.plate) at the
---- current position - over-estimating is harmless (the clip regions come
---- from the window rects, not the bbox), under-estimating leaks pixels for
---- a frame, hence PAD.
 ---@param cfg NameplatesConfig # nameplates settings (hideUnderUI, uiOccludeMode)
 ---@param plate Plate # needs sx/sy; uses plate.ext when present
 ---@param hasCast boolean # extend the bbox downward for a cast bar that ext may not cover yet
 ---@return boolean hide # true = skip the plate entirely (HIDE mode / no clipping support)
----@return number[][]|nil hits # window rects overlapping the bbox (CLIP mode)
----@return number[]|nil bbox # the padded plate bbox {x0,y0,x1,y1} (CLIP mode)
+---@return number[][]|nil pieces # visible pieces of the padded plate bbox (CLIP mode)
 local function occlusion(cfg, plate, hasCast)
   if not cfg.hideUnderUI or #uiRects == 0 then return false end
   local bx0, by0, bx1, by1
@@ -151,29 +70,20 @@ local function occlusion(cfg, plate, hasCast)
     bx0, by0 = ax + ext[1] - PAD, ay + ext[2] - PAD
     bx1, by1 = ax + ext[3] + PAD, ay + ext[4] + PAD
   else
-    local hw = cfg.bar.width * 0.5 + 120     -- not drawn yet: generous guess
+    local hw = cfg.bar.width * 0.5 + 120
     bx0, by0, bx1, by1 = ax - hw, ay - 90, ax + hw, ay + 110
   end
-  if hasCast then   -- cast bar may appear before ext catches up (1 frame)
+  if hasCast then
     by1 = by1 + cfg.castbar.gap + cfg.castbar.height + cfg.castbar.textSize + 2
   end
-  local hits
-  for _, rect in ipairs(uiRects) do
-    if bx0 < rect[3] and bx1 > rect[1] and by0 < rect[4] and by1 > rect[2] then
-      hits = hits or {}
-      hits[#hits + 1] = rect
-    end
-  end
-  if not hits then return false end
+  local pieces = uirects.visible(bx0, by0, bx1, by1, 16)
+  if not pieces then return false end
   if cfg.uiOccludeMode == types.UiOccludeMode.HIDE or not render.caps.clipRect then
-    return true   -- hide the whole plate (or clipping is unavailable here)
+    return true
   end
-  return false, hits, { bx0, by0, bx1, by1 }
+  return false, pieces
 end
 
-----------------------------------------------------------------------------
--- Per-frame draw callback: live position reads + all animation state.
-----------------------------------------------------------------------------
 local OVERLAY_FLAGS = bit.bor(
   ImGuiWindowFlags.NoTitleBar, ImGuiWindowFlags.NoResize, ImGuiWindowFlags.NoMove,
   ImGuiWindowFlags.NoScrollbar, ImGuiWindowFlags.NoScrollWithMouse,
@@ -182,17 +92,22 @@ local OVERLAY_FLAGS = bit.bor(
   ImGuiWindowFlags.NoFocusOnAppearing, ImGuiWindowFlags.NoBringToFrontOnFocus,
   ImGuiWindowFlags.NoNav)
 
-local drawErrLogged = false
+local drawErrSeen, drawErrCount = {}, 0
 
--- No clock reads here: the game paces draw frames (~35fps) and a frame
--- counter drives all animation math. The main loop has NO gating - every
--- pass does everything. Only the cast tracker touches real time.
-local FRAME_DT = 1 / 35
-local animNow  = 0           -- advances once per drawn frame
+local function note_draw_error(problem)
+  local msg = tostring(problem)
+  if drawErrSeen[msg] or drawErrCount >= 20 then return end
+  drawErrSeen[msg] = true
+  drawErrCount = drawErrCount + 1
+  log.Error('draw error: %s', msg)
+end
+
+local MAX_DT = 0.1
+local animNow     = casts.now()
+local lastFrameAt = animNow
 
 local RS = types.ResScope
 
---- Does this plate get a mana/endurance bar under the configured scope?
 ---@param scope ResScope
 ---@param plate Plate
 ---@return boolean|nil yes # truthy when the bar applies
@@ -201,16 +116,17 @@ local function want_res(scope, plate)
   if scope == RS.SELF then return plate.isSelf end
   if scope == RS.GROUP then return plate.isSelf or plate.inGroup end
   if scope == RS.PCS then return plate.isPC end
-  return true   -- ALL
+  return true
 end
 
---- Per-frame plate state from the live spawn: HP (smoothed + damage-flash
---- detection), name, fade/pop progress, mana/endurance where configured.
+local function pct_mana(spawn) return spawn.PctMana() end
+local function pct_endurance(spawn) return spawn.PctEndurance() end
+
 ---@param plate Plate
 ---@param spawn spawn # live spawn TLO (already validated by the caller)
 ---@param cfg NameplatesConfig # nameplates settings
 ---@param timeNow number # frame timebase
----@param dt number # frame delta (FRAME_DT)
+---@param dt number # frame delta, seconds
 local function update_live(plate, spawn, cfg, timeNow, dt)
   local hp = (spawn.PctHPs() or 0) / 100
 
@@ -233,18 +149,17 @@ local function update_live(plate, spawn, cfg, timeNow, dt)
             and anim.ease_out_back((timeNow - plate.bornAt) / math.max(cfg.anim.popDur, 0.01))
             or 1
 
-  -- mana / endurance (self: authoritative; others: spawn members where valid)
   plate.mana, plate.endu = nil, nil
   if want_res(cfg.resources.manaScope, plate) then
     local v
     if plate.isSelf then v = mq.TLO.Me.PctMana()
-    else local okk, sv = pcall(function() return spawn.PctMana() end); v = okk and sv or nil end
+    else local okk, sv = pcall(pct_mana, spawn); v = okk and sv or nil end
     if type(v) == 'number' and (plate.isSelf or v > 0) then plate.mana = v / 100 end
   end
   if want_res(cfg.resources.enduScope, plate) then
     local v
     if plate.isSelf then v = mq.TLO.Me.PctEndurance()
-    else local okk, sv = pcall(function() return spawn.PctEndurance() end); v = okk and sv or nil end
+    else local okk, sv = pcall(pct_endurance, spawn); v = okk and sv or nil end
     if type(v) == 'number' and (plate.isSelf or v > 0) then plate.endu = v / 100 end
   end
 end
@@ -260,8 +175,6 @@ local OM = types.PlateOverlapMode
 ---@field rank integer # importance: 3 = me, 2 = my target, 0 = everyone else
 ---@field dist number # squared 3D distance to me
 
---- Draw/importance rank: my own plate above everything, then my target, then
---- everyone else. Higher ranks draw last and never get pushed around.
 ---@param job PlateJob
 ---@return integer rank
 local function plate_rank(job)
@@ -270,8 +183,6 @@ local function plate_rank(job)
   return 0
 end
 
---- A plate's screen rect at its natural (un-decluttered) anchor, taken from
---- the footprint it measured last frame.
 ---@param cfg NameplatesConfig # nameplates settings (fallback bar size)
 ---@param plate Plate # needs sx/sy
 ---@return number x0, number y0, number x1, number y1
@@ -283,7 +194,6 @@ local function plate_rect(cfg, plate)
   return sx - hw, sy - hh - cfg.name.size, sx + hw, sy + hh
 end
 
---- Clamp a displacement to the configured maximum, in either direction.
 ---@param v number # pixels
 ---@param limit number # cfg.overlap.maxPush
 ---@return number clamped
@@ -293,10 +203,6 @@ local function clamp_push(v, limit)
   return v
 end
 
---- SEPARATE: my own plate and my target's hold their true position; every
---- other plate is walked top to bottom and pushed down below whatever it
---- would have collided with. Re-scanning until the push settles catches the
---- plate that lands on an anchored one further down the screen.
 ---@param ov NpOverlapCfg # cfg.overlap
 ---@param slots PlateSlot[] # this frame's rects, mutated in place
 local function separate_plates(ov, slots)
@@ -324,9 +230,6 @@ local function separate_plates(ov, slots)
   end
 end
 
---- STACK: anchors within clusterRadius of each other collapse into a single
---- column - the most important plate of the cluster keeps its spot and the
---- rest line up underneath it, so a clump of mobs reads as a list.
 ---@param ov NpOverlapCfg # cfg.overlap
 ---@param slots PlateSlot[] # this frame's rects, re-sorted in place
 local function stack_plates(ov, slots)
@@ -354,9 +257,6 @@ local function stack_plates(ov, slots)
   end
 end
 
---- Give every plate in this frame its declutter offset (0,0 while the
---- feature is off, so a plate never keeps a stale shove). render.plate adds
---- ox/oy to the projected anchor; nothing else in the pipeline has to know.
 ---@param cfg NameplatesConfig # nameplates settings (overlap.*)
 ---@param jobs PlateJob[] # this frame's plates
 local function declutter(cfg, jobs)
@@ -375,12 +275,6 @@ local function declutter(cfg, jobs)
   if ov.mode == OM.STACK then stack_plates(ov, slots) else separate_plates(ov, slots) end
 end
 
---- Click-to-target: the topmost plate under the cursor wins (jobs are drawn
---- far to near, so the last one hit is the one on top). Clicks owned by an
---- ImGui window or landing on a native EQ window are left alone, as are
---- plates that are only fading out after their spawn went away. Every ImGui
---- call is pcall-guarded: on a binding without the hover flags the check
---- simply doesn't fire and clicking still targets.
 ---@param cfg NameplatesConfig # nameplates settings (clickTarget)
 ---@param jobs PlateJob[] # this frame's drawn plates, in draw order
 local function click_target(cfg, jobs)
@@ -401,53 +295,38 @@ local function click_target(cfg, jobs)
     local hit = plate.hit
     if hit and not plate.lostAt
         and mx >= hit[1] and mx <= hit[3] and my >= hit[2] and my <= hit[4] then
-      mq.cmdf('/target id %d', plate.id)
+      mq.TLO.Spawn(plate.id).DoTarget()
       return
     end
   end
 end
 
---- One frame of plates: refresh occluder rects, compute the in-flight AE
---- areas, update every live plate (position/HP/AE marks/distance size),
---- declutter the pile, occlude what an EQ window covers, then draw far ->
---- near (painter's algorithm) so closer plates overlap farther ones - my own
---- plate on top, then my target, then everyone by distance. Plates
---- overlapping EQ windows draw clipped per visible sub-rect. A click is
---- resolved last, against the rects this frame actually drew.
 ---@param drawList ImDrawList # the fullscreen overlay window's draw list
 ---@param cfg NameplatesConfig # nameplates settings
 ---@param timeNow number # frame timebase
----@param dt number # frame delta (FRAME_DT)
+---@param dt number # frame delta, seconds
 local function draw_plates(drawList, cfg, timeNow, dt)
-  if cfg.hideUnderUI and uirects.native then
-    -- native rects every frame; an empty result only counts once native has
-    -- proven itself (never clobber the TLO sweep's rects otherwise)
-    local rect = uirects.get()
-    if #rect > 0 or uirects.proven then uiRects = rect end
-  end
+  if cfg.hideUnderUI or cfg.clickTarget or showUiRects then scan_ui_rects() end
   local tgtID = mq.TLO.Target.ID() or 0
   local me = mq.TLO.Me
   local mex, mey, mez = me.X() or 0, me.Y() or 0, me.Z() or 0
   local aeStates = cfg.aehl.enabled and ae.states(cfg, mex, mey, mez) or nil
   local jobs = {}
 
-  for id, plate in pairs(plates) do
+  local function update_plate(id, plate)
     local isTarget = (id == tgtID)
     if not plate.lostAt then
-      -- LIVE read every frame -> plates track movement exactly.
       local spawn = mq.TLO.Spawn(id) --[[@as spawn]]
-      if spawn.ID() == id and spawn.X() then
+      local x = spawn.ID() == id and spawn.X()
+      if x then
         update_live(plate, spawn, cfg, timeNow, dt)
-        local x, y, z = spawn.X(), spawn.Y(), spawn.Z()
+        local y, z = spawn.Y(), spawn.Z()
         local dx, dy, dz = x - mex, y - mey, z - mez
         plate.dist = dx * dx + dy * dy + dz * dz
         local sx, sy, vis = eqgfx.world_to_screen(x, y, z + cfg.bar.zOffset)
         if vis then
           plate.sx, plate.sy = sx, sy
           plate.dscale = distscale.factor(cfg.distScale, math.sqrt(plate.dist))
-          -- AE highlight: count how many in-flight areas cover this plate
-          -- (det outranks ben) and map the count onto the stack alpha curve.
-          -- aeKind lingers so the fade-out keeps its color after marks drop.
           local detN, benN = 0, 0
           if aeStates then
             for si = 1, #aeStates do
@@ -473,10 +352,9 @@ local function draw_plates(drawList, cfg, timeNow, dt)
           jobs[#jobs + 1] = { plate = plate, castInfo = castInfo, isTarget = isTarget }
         end
       else
-        plate.lostAt, plate.lossAlpha = timeNow, plate.alpha       -- spawn despawned
+        plate.lostAt, plate.lossAlpha = timeNow, plate.alpha
       end
     else
-      -- fade out at last known screen position
       local f = cfg.anim.fadeOut and anim.fade(plate.lostAt, cfg.anim.fadeOutDur, timeNow) or 0
       if f <= 0 then
         plates[id] = nil
@@ -488,37 +366,39 @@ local function draw_plates(drawList, cfg, timeNow, dt)
     end
   end
 
+  for id, plate in pairs(plates) do
+    local okp, perr = pcall(update_plate, id, plate)
+    if not okp then note_draw_error(perr) end
+  end
+
   declutter(cfg, jobs)
 
   ---@type PlateJob[]
   local drawn = {}
-  for _, job in ipairs(jobs) do            -- occlusion runs on the decluttered position
-    local hide, hits, bbox = occlusion(cfg, job.plate, job.castInfo ~= nil)
+  for _, job in ipairs(jobs) do
+    local hide, pieces = occlusion(cfg, job.plate, job.castInfo ~= nil)
     if not hide then
-      job.hits, job.bbox = hits, bbox
+      job.pieces = pieces
       drawn[#drawn + 1] = job
     end
   end
 
-  -- layering: my own plate on top of everything (target included), then
-  -- the target, then everyone else by distance
   table.sort(drawn, function(a2, b2)
     local ra, rb = plate_rank(a2), plate_rank(b2)
-    if ra ~= rb then return ra < rb end                -- higher rank drawn later
-    return (a2.plate.dist or 0) > (b2.plate.dist or 0)         -- farthest first
+    if ra ~= rb then return ra < rb end
+    return (a2.plate.dist or 0) > (b2.plate.dist or 0)
   end)
   for _, job in ipairs(drawn) do
-    if job.hits then
-      -- punch the overlapping window rects out of the plate's bbox and draw
-      -- once per leftover piece, clip-rect'd to it - the plate visually
-      -- passes UNDER the native EQ UI (same trick as indicators/)
-      for _, sub in ipairs(uirects.subtract(job.bbox, job.hits, 16)) do
+    if job.pieces then
+      for _, sub in ipairs(job.pieces) do
         drawList:PushClipRect(ImVec2(sub[1], sub[2]), ImVec2(sub[3], sub[4]), false)
-        render.plate(drawList, cfg, job.plate, job.castInfo, timeNow, job.isTarget)
+        local okp, perr = pcall(render.plate, drawList, cfg, job.plate, job.castInfo, timeNow, job.isTarget)
         drawList:PopClipRect()
+        if not okp then note_draw_error(perr) end
       end
     else
-      render.plate(drawList, cfg, job.plate, job.castInfo, timeNow, job.isTarget)
+      local okp, perr = pcall(render.plate, drawList, cfg, job.plate, job.castInfo, timeNow, job.isTarget)
+      if not okp then note_draw_error(perr) end
     end
   end
 
@@ -526,14 +406,12 @@ local function draw_plates(drawList, cfg, timeNow, dt)
 end
 
 local function draw()
-  animNow = animNow + FRAME_DT
-  local timeNow, dt = animNow, FRAME_DT
+  animNow = casts.now()
+  local timeNow, dt = animNow, math.min(animNow - lastFrameAt, MAX_DT)
+  lastFrameAt = animNow
   local cfg = settings.data or {}
 
   if cfg.enabled and not pause.active(cfg.pause) then
-    -- Fullscreen pass-through window at the BACK of the ImGui window stack:
-    -- plates stay under every other ImGui window, and the window context is
-    -- what allows DrawTextureAnimation spell icons.
     local sw, sh = eqgfx.get_screen()
     if not sw or sw <= 0 then sw, sh = 4096, 2160 end
     ImGui.SetNextWindowPos(0, 0)
@@ -553,10 +431,7 @@ local function draw()
           end
         end
       end)
-      if not okk and not drawErrLogged then
-        drawErrLogged = true
-        log.Error('draw error (plates disabled this frame): %s', tostring(drawErr))
-      end
+      if not okk then note_draw_error(drawErr) end
     end
     ImGui.End()
   end
@@ -566,14 +441,17 @@ end
 
 mq.imgui.init('eqgfx_nameplates', draw)
 
-----------------------------------------------------------------------------
--- Binds.
-----------------------------------------------------------------------------
 mq.bind('/npmenu', function() menu.toggle() end)
 mq.bind('/npradius', function(n)
   local cfg = settings.data or {}
-  cfg.radius = tonumber(n) or cfg.radius
-  settings.mark_dirty()
+  local v = tonumber(n)
+  if v and v == v then
+    v = math.min(math.max(v, 20), 500)
+    if v ~= cfg.radius then
+      cfg.radius = v
+      settings.mark_dirty()
+    end
+  end
   log.Info('radius=%d', cfg.radius)
 end)
 mq.bind('/nppcs', function()
@@ -585,9 +463,9 @@ end)
 
 mq.bind('/npdebug', function()
   local c = render.caps
-  log.Info('caps: sizedText=%s multiColor=%s clipRect=%s iconDraw=%s atlasFound=%s iconVariant=%s',
+  log.Info('caps: sizedText=%s multiColor=%s clipRect=%s iconDraw=%s atlasFound=%s',
            tostring(c.sizedText), tostring(c.multiColor), tostring(c.clipRect),
-           tostring(c.iconDraw), tostring(c.atlasFound), tostring(c.iconVariant))
+           tostring(c.iconDraw), tostring(c.atlasFound))
   local tid = mq.TLO.Target.ID()
   if tid and tid > 0 then
     local spawn = mq.TLO.Spawn(tid)
@@ -613,33 +491,13 @@ mq.bind('/npdebug', function()
            types.PlateOverlapModeLabels[cfg.overlap.mode] or '?',
            tostring(cfg.distScale.enabled), cfg.distScale.near, cfg.distScale.far,
            cfg.distScale.minScale, tostring(cfg.clickTarget))
-  log.Info('loaded eqgfx.dll build: %s', eqgfx.build and eqgfx.build() or '?')
-  log.Info('flags: hideUnderUI=%s dll_stale=%s ui_native=%s findMode=%s uirects.native=%s liveRects=%d',
-           tostring((settings.data or {}).hideUnderUI), tostring(eqgfx.dll_stale),
-           tostring(eqgfx.ui_native), tostring(eqgfx.ui_find_mode and eqgfx.ui_find_mode() or '?'),
-           tostring(uirects.native), #uiRects)
+  log.Info('MQEQGFX build: %s', eqgfx.build and eqgfx.build() or '?')
   local names = {}
   scan_ui_rects(names)
-  log.Info('occlusion source: %s | %s',
-           uirects.native and 'NATIVE (named exports)' or 'TLO window scan',
+  local scanned, found = eqgfx.ui_stats()
+  log.Info('hide under windows: %s | %d window names scanned, %d open: %s',
+           tostring((settings.data or {}).hideUnderUI), scanned, found,
            #names > 0 and table.concat(names, ', ') or '(none)')
-  local sn, sf, sx = eqgfx.ui_stats()
-  if sn then
-    log.Info('ui sweep: %d candidate names -> %d rects, %d probe faults%s', sn, sf, sx,
-             sx > 0 and '  <- export/ABI mismatch, occlusion is broken!' or '')
-  else
-    log.Info('ui sweep stats unavailable (old eqgfx.dll loaded - restart EQ)')
-  end
-  local D = uirects.debug
-  log.Info('ui rects: raw=%d kept=%d screen=%sx%s (GetScreenRect = render pixels, identity)',
-           D.raw, D.kept, tostring(D.sw), tostring(D.sh))
-  if D.firstKept then
-    log.Info('ui rects: first kept = %s %.0f,%.0f .. %.0f,%.0f',
-             D.firstKept.name or '?', D.firstKept[1], D.firstKept[2], D.firstKept[3], D.firstKept[4])
-  elseif D.firstRaw then
-    log.Info('ui rects: first RAW = %.0f,%.0f .. %.0f,%.0f (nothing kept - paste this!)',
-             D.firstRaw[1], D.firstRaw[2], D.firstRaw[3], D.firstRaw[4])
-  end
   log.Info('use /npui show to draw detected occluder rects on screen')
   local sts = ae.states(settings.data or {}, mq.TLO.Me.X() or 0, mq.TLO.Me.Y() or 0, mq.TLO.Me.Z() or 0)
   if #sts > 0 then
@@ -661,8 +519,15 @@ mq.bind('/npui', function(...)
   end
   if args[1] == 'add' and args[2] then
     local name = table.concat(args, ' ', 2)
-    table.insert((settings.data or {}).extraWindows, name)
-    uirects.add_names({ name })   -- pushed into the native scan's name list
+    local list = (settings.data or {}).extraWindows
+    for _, existing in ipairs(list) do
+      if existing == name then
+        log.Info('occlusion window already listed: "%s"', name)
+        return
+      end
+    end
+    table.insert(list, name)
+    uirects.add_names({ name })
     settings.mark_dirty()
     log.Info('occlusion window added: "%s"', name)
   else
@@ -675,18 +540,9 @@ end)
 
 log.Info('nameplates running. /npmenu, /npradius N, /nppcs, /npdebug, /npui')
 
-----------------------------------------------------------------------------
--- Main loop: cast tracking + slow plate discovery + debounced settings save.
-----------------------------------------------------------------------------
-
--- Buff scan. Self uses Me.Buff directly (always available); other spawns
--- use MQ's cached buffs - Spawn.Buff(index) with a CachedBuff('*i') fallback.
--- Cached data only exists for spawns you've targeted at least once. Member
--- names differ between buff/cachedbuff types, so every getter is chained
--- (SpellID -> Spell.ID etc.) and pcall-guarded.
 local buffScanWarned = false
+local BUFF_INTERVAL = 1.0
 
---- pcall a TLO getter, keep the result only when it's a number.
 ---@param f fun(): any
 ---@return number|nil
 local function getn(f)
@@ -694,7 +550,6 @@ local function getn(f)
   if okk and type(v) == 'number' then return v end
 end
 
---- pcall a TLO getter, coerce to boolean (nil = the call itself failed).
 ---@param f fun(): any
 ---@return boolean|nil
 local function getbool(f)
@@ -703,7 +558,6 @@ local function getbool(f)
   return nil
 end
 
---- pcall a TLO getter, keep the result only when it's a non-empty string.
 ---@param f fun(): any
 ---@return string|nil
 local function getstr(f)
@@ -711,7 +565,6 @@ local function getstr(f)
   if okk and type(v) == 'string' and v ~= '' then return v end
 end
 
---- Case-insensitive membership test against a list of names.
 ---@param list string[]|nil
 ---@param key string # ALREADY lowercased
 ---@return boolean
@@ -722,8 +575,6 @@ local function list_has(list, key)
   return false
 end
 
---- Scan-time buff filtering + override resolution (hide/whitelist/blacklist/
---- mineOnly), and stamps entry.scale/prio from the per-buff overrides.
 ---@param buffCfg NpBuffsCfg # cfg.buffs
 ---@param entry BuffEntry
 ---@return boolean keep # false = drop the buff
@@ -743,8 +594,6 @@ local function apply_buff_rules(buffCfg, entry)
   return true
 end
 
---- Sort buffs in place: higher priority first (they also survive the
---- maxIcons cap), original order as the stable tiebreaker.
 ---@param lst BuffEntry[]
 local function sort_buffs(lst)
   for n, entry in ipairs(lst) do entry._i = n end
@@ -754,17 +603,13 @@ local function sort_buffs(lst)
   end)
 end
 
---- Rebuild a plate's buff lists. Self uses Me.Buff (always available);
---- other spawns use Spawn.Buff with a CachedBuff('*i') fallback - cached
---- data only exists for spawns you've targeted at least once. Getters are
---- chained + pcall-guarded because member names differ across MQ builds.
 ---@param plate Plate # buffsB/buffsD replaced
 ---@param spawn spawn # live spawn TLO
 ---@param isSelf boolean
 local function refresh_buffs(plate, spawn, isSelf)
   local buffCfg = (settings.data or {}).buffs
   local myName = mq.TLO.Me.CleanName() or ''
-  local seen = {}   -- id -> addedAt from the previous scan (appear flash)
+  local seen = {}
   for _, lst in ipairs({ plate.buffsB, plate.buffsD }) do
     for _, entry in ipairs(lst or {}) do seen[entry.id] = entry.addedAt end
   end
@@ -774,24 +619,18 @@ local function refresh_buffs(plate, spawn, isSelf)
     local id = getn(function() return buff.SpellID() end)
             or getn(function() return buff.Spell.ID() end)
     if not id or id <= 0 then return false end
-    local icon = getn(function() return buff.SpellIcon() end)
-              or getn(function() return buff.Spell.SpellIcon() end) or 0
+    local icon = getn(function() return buff.SpellIcon() end) or 0
     local ben = getbool(function() return buff.Beneficial() end)
-    if ben == nil then ben = getbool(function() return buff.Spell.Beneficial() end) end
-    local name = getstr(function() return buff.Name() end)
-              or getstr(function() return buff.Spell.Name() end) or ''
+    local name = getstr(function() return buff.Name() end) or ''
     local caster = getstr(function() return buff.Caster() end)
-                or getstr(function() return buff.CasterName() end)
-    local dur = getn(function() return buff.Duration() end)
-             or getn(function() return buff.Duration.TotalSeconds() end)
-    if dur and dur > 30000 then dur = math.floor(dur / 1000) end  -- ms -> s
+    local dur = getn(function() return buff.Duration.TotalSeconds() end)
     local entry = { id = id, icon = icon, ben = ben and true or false,
                 name = name, mine = (caster == myName),
                 caster = caster, dur = dur, addedAt = seen[id] or animNow }
     if apply_buff_rules(buffCfg, entry) then
       if entry.ben then benefits[#benefits + 1] = entry else detriments[#detriments + 1] = entry end
     end
-    return true   -- counts as a slot hit even when filtered out
+    return true
   end
 
   if isSelf then
@@ -825,30 +664,10 @@ local function refresh_buffs(plate, spawn, isSelf)
   plate.buffsB, plate.buffsD = benefits, detriments
 end
 
+local slowExempt, slowExemptAt = {}, 0
 
---- Spawn IDs that keep their plate through a wall, per cfg.los.exempt: the
---- ones you track precisely BECAUSE you can't see them. Group IDs are
---- already gathered by the caller; the rest come from their own TLOs, each
---- pcall-guarded so a roster the build doesn't expose just contributes
---- nothing. Extended targets read the slot count either way it is exposed;
---- fellowship members have no spawn handle, so they resolve by name.
----@param cfg NameplatesConfig # nameplates settings (los.exempt)
----@param groupIDs table<integer, boolean> # my group's spawn IDs
----@return table<integer, boolean> exempt
-local function los_exempt_ids(cfg, groupIDs)
-  local ex = cfg.los.exempt
+local function slow_exempt_ids(ex)
   local out = {}
-  if ex.group then
-    for gid in pairs(groupIDs) do out[gid] = true end
-  end
-  if ex.target then
-    local tid = mq.TLO.Target.ID()
-    if tid and tid > 0 then out[tid] = true end
-  end
-  if ex.pet then
-    local pid = mq.TLO.Me.Pet.ID()
-    if pid and pid > 0 then out[pid] = true end
-  end
   if ex.xtarget then
     local slots = getn(function() return mq.TLO.Me.XTargetSlots() end)
                or getn(function() return mq.TLO.Me.XTarget() end) or 0
@@ -880,13 +699,35 @@ local function los_exempt_ids(cfg, groupIDs)
   return out
 end
 
---- Can I see this spawn? The raycast is not free with a crowd in range, so
---- each spawn's answer is cached for cfg.los.interval seconds. A build that
---- can't answer counts as visible - the filter never hides everything.
+---@param cfg NameplatesConfig # nameplates settings (los.exempt)
+---@param groupIDs table<integer, boolean> # my group's spawn IDs
+---@return table<integer, boolean> exempt
+local function los_exempt_ids(cfg, groupIDs)
+  local ex = cfg.los.exempt
+  local out = {}
+  if ex.group then
+    for gid in pairs(groupIDs) do out[gid] = true end
+  end
+  if ex.target then
+    local tid = mq.TLO.Target.ID()
+    if tid and tid > 0 then out[tid] = true end
+  end
+  if ex.pet then
+    local pid = mq.TLO.Me.Pet.ID()
+    if pid and pid > 0 then out[pid] = true end
+  end
+  local clock = casts.now()
+  if clock - slowExemptAt >= 1 then
+    slowExempt, slowExemptAt = slow_exempt_ids(ex), clock
+  end
+  for sid in pairs(slowExempt) do out[sid] = true end
+  return out
+end
+
 ---@param spawn spawn # candidate spawn TLO
 ---@param id integer # its spawn ID
 ---@param interval number # seconds between re-checks
----@param timeNow number # os.clock()
+---@param timeNow number # casts.now()
 ---@return boolean visible
 local function in_los(spawn, id, interval, timeNow)
   local cached = losCache[id]
@@ -897,9 +738,6 @@ local function in_los(spawn, id, interval, timeNow)
   return visible
 end
 
---- Only real creatures get plates. The plain radius spawn search also
---- returns auras, campfires, banners, totems, corpses, traps... - all
---- filtered here.
 ---@param cfg NameplatesConfig # nameplates settings (show.*)
 ---@param spawn spawn # candidate spawn TLO
 ---@param id integer # its spawn ID
@@ -916,14 +754,6 @@ local function allowed(cfg, spawn, id, myID)
   return false, 'other'
 end
 
---- Slow-loop plate discovery: radius spawn search decides WHICH spawns get
---- plates (create/revive/expire), refreshes group membership, spawn kinds
---- and buff lists. Positions are NOT read here - the draw callback does
---- that live every frame.
----
---- Losing line of sight simply drops the spawn from this pass, so the plate
---- fades out through the normal left-range path and pops back when you can
---- see it again.
 local function discover()
   local cfg = settings.data or {}
   local myID = mq.TLO.Me.ID()
@@ -939,14 +769,16 @@ local function discover()
     end
   end)
 
+  local tgtID = mq.TLO.Target.ID() or 0
+  local clock = casts.now()
+
   local losCfg = cfg.los
   local losExempt = losCfg.enabled and los_exempt_ids(cfg, groupIDs) or nil
-  local losNow, losSeen = os.clock(), {}
+  local losNow, losSeen = clock, {}
   if not losCfg.enabled and next(losCache) then losCache = {} end
 
-  local cnt = mq.TLO.SpawnCount(spec)() or 0
-  for i = 1, cnt do
-    local spawn = mq.TLO.NearestSpawn(string.format('%d, %s', i, spec)) --[[@as spawn]]
+  for _, sid in ipairs(eqgfx.spawn_search(spec)) do
+    local spawn = mq.TLO.Spawn(sid) --[[@as spawn]]
     if spawn() and spawn.X() then
       local id = spawn.ID()
       local allow, kind = allowed(cfg, spawn, id, myID)
@@ -976,39 +808,51 @@ local function discover()
           end
         end
         if cfg.buffs.enabled then
-          refresh_buffs(plate, spawn, id == myID)
+          if cfg.buffs.onlyTarget and id ~= tgtID then
+            plate.buffsB, plate.buffsD = nil, nil
+          elseif id == tgtID or id == myID or clock >= (plate.buffDue or 0) then
+            plate.buffDue = clock + BUFF_INTERVAL
+            refresh_buffs(plate, spawn, id == myID)
+          end
         end
       end
     end
   end
   for id, plate in pairs(plates) do
     if not present[id] and not plate.lostAt then
-      plate.lostAt, plate.lossAlpha = animNow, plate.alpha           -- left range -> fade
+      plate.lostAt, plate.lossAlpha = animNow, plate.alpha
     end
   end
   if losExempt then
     for id in pairs(losCache) do
-      if not losSeen[id] then losCache[id] = nil end                 -- out of range -> forget it
+      if not losSeen[id] then losCache[id] = nil end
     end
   end
 end
+
+local DISCOVER_INTERVAL = 0.2
+local nextDiscoverAt = 0
 
 while true do
   mq.doevents()
   local cfg = settings.data or {}
 
-  casts.config{ interruptDetect = cfg.castbar.interruptDetect, radius = cfg.radius }
-  casts.update()
-
-  local idle = pause.active(cfg.pause)   -- nothing is on screen: skip the scans, keep the plates
-  if cfg.hideUnderUI and not idle then scan_ui_rects() end
+  local idle = pause.active(cfg.pause)
 
   if cfg.enabled and not idle then
-    discover()
+    if cfg.castbar.show or cfg.aehl.enabled then
+      casts.config{ interruptDetect = cfg.castbar.interruptDetect, radius = cfg.radius }
+      casts.update()
+    end
+    local clock = casts.now()
+    if clock >= nextDiscoverAt then
+      nextDiscoverAt = clock + (cfg.los.enabled and math.min(DISCOVER_INTERVAL, cfg.los.interval) or DISCOVER_INTERVAL)
+      discover()
+    end
   elseif not cfg.enabled and next(plates) then
     plates = {}
   end
 
-  settings.maybe_save(log)
+  settings.maybe_save()
   mq.delay(50)
 end

@@ -1,18 +1,12 @@
---[[
-  indicators/menu.lua - the in-game settings window (/aemenu).
-]]
-
 local ImGui    = require('ImGui')
 local settings = require('eqgfx.indicators.settings')
 
 local M = { open = false }
 
---- Show/hide the settings window (the /aemenu bind).
 function M.toggle() M.open = not M.open end
 
 local function mark() settings.mark_dirty() end
 
---- Checkbox bound to a settings key; marks dirty on change.
 ---@param label string
 ---@param key string # key within `tbl`
 ---@param tbl table|nil # settings subtable (default: the top level)
@@ -22,8 +16,6 @@ local function check(label, key, tbl)
   if pressed then t[key] = v; mark() end
 end
 
---- Keep colors as plain number tables (pickle-safe) regardless of what the
---- binding hands back (table vs ImVec4).
 ---@param colorVal table|any # ImGui ColorEdit4 result
 ---@return number[] color # plain {r,g,b,a}
 local function to_color(colorVal)
@@ -31,7 +23,6 @@ local function to_color(colorVal)
   return { colorVal.x, colorVal.y, colorVal.z, colorVal.w }
 end
 
---- Color picker bound to settings.data.colors[key]; marks dirty on change.
 ---@param label string
 ---@param key string # key in settings.data.colors
 local function color(label, key)
@@ -40,7 +31,6 @@ local function color(label, key)
   if changed then cfg.colors[key] = to_color(colorVal); mark() end
 end
 
---- Integer slider bound to a top-level settings key; marks dirty on change.
 ---@param label string
 ---@param key string # key in settings.data
 ---@param lo integer
@@ -51,7 +41,6 @@ local function slideri(label, key, lo, hi)
   if changed then cfg[key] = v; mark() end
 end
 
---- Float slider bound to a top-level settings key; marks dirty on change.
 ---@param label string
 ---@param key string # key in settings.data
 ---@param lo number
@@ -62,7 +51,6 @@ local function sliderf(label, key, lo, hi)
   if changed then cfg[key] = v; mark() end
 end
 
---- Render the settings window (call every frame; no-op while closed).
 function M.draw()
   if not M.open then return end
   local cfg = settings.data or {}
@@ -73,7 +61,7 @@ function M.draw()
     ImGui.SameLine()
     if ImGui.RadioButton('This character', settings.scope == 'char') then settings.set_scope('char') end
     ImGui.SameLine()
-    if ImGui.RadioButton('This server', settings.scope == 'server') then settings.set_scope('server') end
+    if ImGui.RadioButton('This class', settings.scope == 'class') then settings.set_scope('class') end
     ImGui.SameLine()
     if ImGui.RadioButton('All characters', settings.scope == 'global') then settings.set_scope('global') end
     ImGui.Separator()

@@ -1,16 +1,3 @@
---- lib/pause.lua - "should this feature draw at all right now?", shared by the
---- eqgfx feature scripts.
----
---- Two independent reasons to stop: EverQuest is not the foreground window, and
---- the frame limiter has stopped drawing the scene (its visible frame rate
---- falls to ~0 while the simulation keeps running). Neither TLO is guaranteed
---- to exist on every build, so an unreadable one counts as "keep drawing".
----
---- ```lua
---- local pause = require('eqgfx.lib.pause')
---- if pause.active(cfg.pause) then return end   -- skip the draw pass
---- ```
-
 local mq = require('mq')
 
 ---@class PauseCfg  when a feature stops drawing (one per feature settings tree)
@@ -19,10 +6,8 @@ local mq = require('mq')
 
 local M = {}
 
-local RENDER_FLOOR = 1.0   -- visible fps at or below which nothing is being drawn
+local RENDER_FLOOR = 1.0
 
---- pcall a TLO getter, keep the result only when it is a real boolean (nil =
---- the call failed or the member isn't there, which both mean "don't know").
 ---@param f fun(): any
 ---@return boolean|nil
 local function getbool(f)
@@ -31,7 +16,6 @@ local function getbool(f)
   return nil
 end
 
---- pcall a TLO getter, keep the result only when it's a number.
 ---@param f fun(): any
 ---@return number|nil
 local function getn(f)
@@ -39,15 +23,11 @@ local function getn(f)
   if ok and type(v) == 'number' then return v end
 end
 
---- Is the EverQuest window in the foreground? Unknown counts as yes.
 ---@return boolean foreground
 function M.foreground()
   return getbool(function() return mq.TLO.EverQuest.Foreground() end) ~= false
 end
 
---- Is the client actually drawing frames? The frame limiter can stop rendering
---- the scene while the simulation keeps running, and reports a visible frame
---- rate of ~0 while it does. No frame limiter counts as yes.
 ---@return boolean rendering
 function M.rendering()
   local limiter = mq.TLO.FrameLimiter
@@ -56,12 +36,6 @@ function M.rendering()
   return fps == nil or fps > RENDER_FLOOR
 end
 
---- Should drawing be skipped this frame?
----
---- ```lua
---- local paused, why = pause.active(cfg.pause)
---- if paused then log.Info('idle: %s', why) return end
---- ```
 ---@param cfg PauseCfg|nil # nil = never pause
 ---@return boolean paused
 ---@return string|nil reason # 'background' | 'not rendering'
@@ -70,6 +44,12 @@ function M.active(cfg)
   if cfg.whenBackground and not M.foreground() then return true, 'background' end
   if cfg.whenNotRendering and not M.rendering() then return true, 'not rendering' end
   return false
+end
+
+function M.wait_for_game()
+  while mq.TLO.MacroQuest.GameState() ~= 'INGAME' or not mq.TLO.Me.CleanName() do
+    mq.delay(1000)
+  end
 end
 
 return M
