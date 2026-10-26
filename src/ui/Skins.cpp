@@ -17,7 +17,6 @@ constexpr float kPad = 4.0f;
 constexpr float kLongPress = 0.45f;
 constexpr float kTapSlop = 6.0f;
 
-
 std::unordered_map<std::string, BarLayout> s_layouts;
 std::unordered_set<std::string>            s_resize;
 int                                        s_layoutSerial = -1;

@@ -23,7 +23,7 @@ namespace {
 
 std::filesystem::path Folder()
 {
-	return std::filesystem::path(gPathConfig) / "MQEQGFX_layouts";
+	return settings::LayoutsDir();
 }
 
 std::string Clean(const std::string& name)

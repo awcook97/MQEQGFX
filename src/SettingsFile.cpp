@@ -468,6 +468,74 @@ File& Global()
 	return file;
 }
 
+std::filesystem::path Dir()        { return std::filesystem::path(gPathConfig) / "MQEQGFX"; }
+std::filesystem::path ClassesDir() { return Dir() / "classes"; }
+std::filesystem::path LooksDir()   { return Dir() / "looks"; }
+std::filesystem::path LayoutsDir() { return Dir() / "layouts"; }
+std::filesystem::path LuaDir()     { return Dir() / "lua"; }
+
+namespace {
+
+void MoveIfFree(const std::filesystem::path& from, const std::filesystem::path& to)
+{
+	std::error_code ec;
+	if (!std::filesystem::exists(from, ec) || std::filesystem::exists(to, ec))
+		return;
+	std::filesystem::rename(from, to, ec);
+}
+
+bool HasPrefix(const std::string& s, const char* prefix)
+{
+	return s.rfind(prefix, 0) == 0;
+}
+
+bool IsClassKey(const std::string& s)
+{
+	return s.size() == 3 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isalpha(c) != 0; });
+}
+
+} // namespace
+
+void PrepareConfigDirs()
+{
+	std::error_code ec;
+	for (const auto& dir : { Dir(), ClassesDir(), LooksDir() })
+		std::filesystem::create_directories(dir, ec);
+
+	const std::filesystem::path root(gPathConfig);
+
+	MoveIfFree(root / "MQEQGFX.json", Dir() / "MQEQGFX.json");
+	MoveIfFree(root / "MQEQGFX.ini", Dir() / "MQEQGFX.ini");
+	MoveIfFree(root / "MQEQGFX.json.before-restore", Dir() / "MQEQGFX.json.before-restore");
+	MoveIfFree(root / "MQEQGFX_shaders.bin", Dir() / "shaders.bin");
+	MoveIfFree(root / "MQEQGFX_layouts", LayoutsDir());
+	MoveIfFree(root / "eqgfx", LuaDir());
+	MoveIfFree(root / "eqgfx.log", Dir() / "eqgfx.log");
+	MoveIfFree(root / "eqgfx.log.old", Dir() / "eqgfx.log.old");
+
+	std::vector<std::filesystem::path> files;
+	for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+		if (entry.is_regular_file(ec))
+			files.push_back(entry.path());
+
+	for (const auto& path : files)
+	{
+		const std::string name = path.filename().string();
+		const std::string stem = path.stem().string();
+		const std::string ext = path.extension().string();
+		if (!HasPrefix(name, "MQEQGFX_"))
+			continue;
+
+		if (HasPrefix(name, "MQEQGFX_look_") && ext == ".json")
+			MoveIfFree(path, LooksDir() / (stem.substr(13) + ext));
+		else if ((ext == ".json" || ext == ".ini") && IsClassKey(stem.substr(8)))
+			MoveIfFree(path, ClassesDir() / (stem.substr(8) + ext));
+	}
+
+	std::filesystem::create_directories(LuaDir(), ec);
+	std::filesystem::create_directories(LayoutsDir(), ec);
+}
+
 void FlushWrites()
 {
 	{

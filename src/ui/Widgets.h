@@ -33,7 +33,7 @@ struct Mapping
 {
 	float scale = 1.0f;
 
-	ImVec2 Point(int x, int y) const { return ImVec2(x * scale, y * scale); }
+	ImVec2 Point(int x, int y) const { return {x * scale, y * scale}; }
 	ImVec2 Min(const eqlib::CXRect& r) const { return Point(r.left, r.top); }
 	ImVec2 Max(const eqlib::CXRect& r) const { return Point(r.right, r.bottom); }
 };

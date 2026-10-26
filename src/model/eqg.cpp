@@ -11,7 +11,7 @@ static float    rdf(const uint8_t* p)  { float v;    std::memcpy(&v, p, 4); retu
 static std::string strAt(const uint8_t* pool, uint32_t poolSize, uint32_t off)
 {
 	if (off >= poolSize)
-		return std::string();
+		return {};
 	const char* s = reinterpret_cast<const char*>(pool + off);
 	size_t maxLen = poolSize - off;
 	size_t len = 0;

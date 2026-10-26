@@ -488,6 +488,7 @@ void DumpModelCommand()
 }
 
 namespace {
+
 bool IsLocalActor(void* self)
 {
 	PlayerClient* me = pLocalPlayer.get();
@@ -500,7 +501,7 @@ std::string LocalOwnerKey()
 {
 	PlayerClient* me = pLocalPlayer.get();
 	if (!me || !pEverQuestInfo)
-		return std::string();
+		return {};
 	return std::string(GetServerShortName()) + "_" + me->Name;
 }
 
@@ -620,7 +621,7 @@ std::string CaptureFilePath(const std::string& owner, const std::string& actorDe
 {
 	std::string tag = owner + "_" + (actorDef.empty() ? "unknown" : actorDef);
 	for (char& c : tag) { if (!std::isalnum(static_cast<unsigned char>(c))) c = '_'; else c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
-	return (std::filesystem::path(gPathConfig) / ("MQEQGFX_look_" + tag + ".json")).string();
+	return (eqgfx::settings::LooksDir() / (tag + ".json")).string();
 }
 
 } // namespace

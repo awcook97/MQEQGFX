@@ -53,6 +53,7 @@
 ---@field enabled boolean
 ---@field radius integer      # detection range, world units
 ---@field selfCasts boolean
+---@field alongsideNative boolean
 ---@field charge boolean      # animate the bar filling, not just the landing
 ---@field byResist boolean
 ---@field releaseLife number  # seconds a burst lasts

@@ -16,7 +16,7 @@ log.SetColors(true)
 log.SetIncludeCharacter('Server.Character.Zone')
 log.SetIncludeTime('milliseconds')
 log.SetLevel(log.INFO)
-log.SetOutputFile(mq.configDir .. '/eqgfx.log')
+log.SetOutputFile(mq.configDir .. '/MQEQGFX/eqgfx.log')
 
 pause.wait_for_game()
 

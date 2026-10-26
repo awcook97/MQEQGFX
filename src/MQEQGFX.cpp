@@ -55,7 +55,7 @@ struct ScreenRect
 	float x0, y0, x1, y1;
 	uint32_t color;
 };
- 
+
 struct SceneFrame
 {
 	std::vector<Segment>    segments;
@@ -983,7 +983,7 @@ sol::table BuildModuleTable(sol::state_view sv)
 			return std::make_tuple(false, sol::optional<std::string>("MQEQGFX plugin is not active"));
 		if (GetGameState() != GAMESTATE_INGAME)
 			return std::make_tuple(false, sol::optional<std::string>("not in game yet"));
-		if (!g_pDrawHandler.get())
+		if (!g_pDrawHandler)
 			return std::make_tuple(false, sol::optional<std::string>("render interface is null (not in game yet?)"));
 		return std::make_tuple(true, sol::optional<std::string>());
 	});
@@ -1464,6 +1464,37 @@ sol::table BuildModuleTable(sol::state_view sv)
 		return static_cast<int32_t>((Channel(a) << 24) | (Channel(b) << 16) | (Channel(g) << 8) | Channel(r));
 	});
 
+	m.set_function("get_eye", []() -> std::tuple<float, float, float> {
+		CVector3 eye(0.0f, 0.0f, 0.0f);
+		if (CRender* render = g_pDrawHandler.get())
+			render->GetEyeOffset(eye);
+		return { eye.X, eye.Y, eye.Z };
+	});
+
+	m.set_function("world_to_camera", [](float x, float y, float z) -> std::tuple<float, float, float> {
+		CVector3 cam(0.0f, 0.0f, 0.0f);
+		if (CRender* render = g_pDrawHandler.get())
+			render->TransformWorldToCamera(CVector3(x, y, z), cam);
+		return { cam.X, cam.Y, cam.Z };
+	});
+
+	m.set_function("dump_matrix", [](sol::this_state L) {
+		sol::state_view sv(L);
+		sol::table t = sv.create_table(16, 0);
+		if (CRender* render = g_pDrawHandler.get())
+		{
+			const float* f = reinterpret_cast<const float*>(&render->matrixViewProj);
+			for (int i = 0; i < 16; ++i)
+				t[i + 1] = f[i];
+		}
+		else
+		{
+			for (int i = 0; i < 16; ++i)
+				t[i + 1] = 0.0f;
+		}
+		return t;
+	});
+
 	m.set_function("cast_feed_live", []() -> bool {
 #ifdef CEverQuest__StartCasting_x
 		return s_castTapInstalled;
@@ -1827,9 +1858,10 @@ PLUGIN_API void InitializePlugin()
 
 	s_fxStartTime = SteadySeconds();
 
-	const std::filesystem::path configDir(gPathConfig);
+	eqgfx::settings::PrepareConfigDirs();
+	const std::filesystem::path configDir = eqgfx::settings::Dir();
 
-	s_lineFX.SetShaderCacheFile((configDir / "MQEQGFX_shaders.bin").string());
+	s_lineFX.SetShaderCacheFile((configDir / "shaders.bin").string());
 
 	eqgfx::settings::Global().Open(configDir / "MQEQGFX.json", INIFileName);
 
@@ -1843,6 +1875,7 @@ PLUGIN_API void InitializePlugin()
 
 	AddCommand("/eqgfx", EqgfxCommand);
 	AddCommand("/attarget", AtTargetCommand);
+	AddSettingsPanel("plugins/MQEQGFX", eqgfx::unitframes::DrawSettingsPanel);
 }
 
 PLUGIN_API void ShutdownPlugin()
@@ -1850,6 +1883,7 @@ PLUGIN_API void ShutdownPlugin()
 	s_active = false;
 
 	RemoveCommand("/eqgfx");
+	RemoveSettingsPanel("plugins/MQEQGFX");
 	RemoveCommand("/attarget");
 
 	RemoveCastTap();

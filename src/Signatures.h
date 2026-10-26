@@ -3,6 +3,7 @@
 #include <cstdint>
 
 namespace eqgfx::sig {
+
 inline constexpr const char* CRenderStateCache__FlushToDevice =
 	"40 53 55 56 57 41 56 48 83 EC 30 FF 81 CC 33 00 00 33 ED 48 8B 05";
 inline constexpr const char* CRenderStateCache__SetStreamSource =

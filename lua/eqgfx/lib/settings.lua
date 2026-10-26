@@ -18,9 +18,9 @@ end
 ---@param scope string # 'char' | 'class' | 'global'
 ---@return string file
 local function file_for(scope)
-  if scope == 'global' then return 'eqgfx/global_settings.lua' end
-  if scope == 'class' then return 'eqgfx/class_' .. sanitize(mq.TLO.Me.Class.ShortName()) .. '_settings.lua' end
-  return 'eqgfx/' .. sanitize(mq.TLO.EverQuest.Server()) .. '_' .. sanitize(mq.TLO.Me.CleanName()) .. '_settings.lua'
+  if scope == 'global' then return 'MQEQGFX/lua/global_settings.lua' end
+  if scope == 'class' then return 'MQEQGFX/lua/class_' .. sanitize(mq.TLO.Me.Class.ShortName()) .. '_settings.lua' end
+  return 'MQEQGFX/lua/' .. sanitize(mq.TLO.EverQuest.Server()) .. '_' .. sanitize(mq.TLO.Me.CleanName()) .. '_settings.lua'
 end
 
 ---@param path string # absolute path

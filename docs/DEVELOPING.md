@@ -16,7 +16,7 @@ src/                the MacroQuest plugin implementing the core module:
                       Models.cpp         model viewer + appearance capture (experimental)
                       MQEQGFX.h          state shared between those files
                       model/             standalone EQ model-file readers + DX11 view
-CMakeLists.txt      names the plugin target for the MacroQuest tree's build
+CMakeLists.txt      plugin build target
 lua/eqgfx/          the Lua package, deployed to <MQ>/lua/eqgfx:
   init.lua            entry shim: require('eqgfx') -> require('plugin.MQEQGFX')
   core/               _types.lua: TargetType enums + LuaLS annotations
@@ -82,17 +82,9 @@ library, and keep `lua-language-server --check .` at zero problems.
 
 ## Building the plugin
 
-The `src/` sources build a normal MacroQuest plugin (links MQ2Main, eqlib,
-pluginapi) plus sol2/LuaJIT for the Lua module. It builds as part of the
-MacroQuest tree: this repo sits in the tree's `plugins/` folder, where the
-build discovers `CMakeLists.txt` and produces `plugins/MQEQGFX.dll`. On the
-Linux/msvc-wine tree that is `./build-linux.sh` (the `MQEQGFX` case block
-there adds the sol2/LuaJIT flags); a regular Windows MQ CMake build consumes
-the same `CMakeLists.txt`.
-
-Do **not** build it standalone: the plugin must compile with the exact same
-define set as eqlib/MQ2Main or struct layouts shift across the DLL boundary
-and crash in-game. The tree's plugin build guarantees that.
+A normal MacroQuest plugin plus sol2/LuaJIT for the Lua module. On
+Linux/msvc-wine, `./build-linux.sh` (its `MQEQGFX` case block adds the
+sol2/LuaJIT flags).
 
 **No game restart needed to update**: `/plugin MQEQGFX unload`, replace the
 DLL, `/plugin MQEQGFX`. MQ2Lua stops dependent scripts on unload.
@@ -129,19 +121,18 @@ game. Known gaps on emu/ROF2:
 - The DLL's UI window sweep runs on the **render thread** (inside the
   `GraphicsSceneRender` callback) where engine calls are legal; Lua only
   snapshots the cached result (`get_ui_rects`) under a small mutex.
-  Per-window calls are SEH-isolated so engine-side faults degrade to "no
-  rect", never a client crash.
 - **Never put a Window-TLO sweep in script loops.** A full TLO window scan
   was measured stalling the Lua loop for hundreds of milliseconds, starving
   `mq.doevents()` and lagging cast detection by seconds. The native scan is
-  the single source of occluder rects; if it's unavailable, occlusion turns
-  off loudly.
-- Nameplate animation runs on a **frame counter** (`FRAME_DT = 1/35`), not
-  the wall clock — the game paces draw frames. Only the cast tracker touches
-  real time (`os.clock()`), because spell durations are wall seconds.
-- The main loops are flat: every pass does everything, no time-gating, with
-  `mq.delay(50)` pacing. The per-frame draw callback does the position reads
-  so plates track movement exactly.
+  the single source of occluder rects.
+- Every script runs on one clock, `mq.gettime()` (monotonic milliseconds);
+  `casts.now()` is that in seconds. Nameplate and damage-number animation,
+  the cast tracker and highlight all read it, so animation speed does not
+  depend on frame rate.
+- The main loops pace with `mq.delay(50)`. Spawn discovery and buff scans are
+  time-gated (discovery every 0.2 s, buffs once a second per plate); the
+  per-frame draw callback does the position reads so plates track movement
+  exactly.
 
 ---
 
@@ -155,8 +146,8 @@ game. Known gaps on emu/ROF2:
   into `plate.ext` (geometry cursors + text/cast-bar extents). Next frame,
   that bbox is tested against the occluder rects; overlapping plates are
   either skipped (HIDE) or drawn once per visible sub-rectangle with
-  `PushClipRect` (CLIP) — `uirects.subtract` punches the windows out of the
-  bbox. Over-estimating the bbox is harmless; under-estimating leaks pixels
+  `PushClipRect` (CLIP) — `uirects.visible` (the native `ui_subtract`)
+  punches the windows out of the bbox. Over-estimating the bbox is harmless; under-estimating leaks pixels
   for one frame.
 - **Draw order**: plates are gathered, then painted far → near; your target
   ranks above everything except your own plate.
@@ -179,7 +170,7 @@ game. Known gaps on emu/ROF2:
   broadcasts `eqgfx_cast=<casterID>=<spellID>=<targetID>`, and every box
   draws the target ring (stub entries handle casters outside local
   detection range).
-- World drawing is clipped to `uirects.regions(rects, sw, sh)` — the screen
+- World drawing is clipped to `uirects.regions(sw, sh)` — the screen
   minus the open windows — so areas render under the native UI.
 
 ---

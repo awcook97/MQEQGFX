@@ -43,11 +43,11 @@ Hot buttons are the plugin's own: each has a label, an icon and a list of comman
 
 ## Per-class profiles
 
-Window positions, bar layouts, hot buttons, button sets and chat tabs are kept per class in `MQEQGFX_<class>.json` (for example `MQEQGFX_shm.json`) in the MacroQuest `config` folder. Every character of that class shares it, and the profile switches when you log in a character of another class.
+Window positions, bar layouts, hot buttons, button sets and chat tabs are kept per class in `MQEQGFX/classes/<class>.json` (for example `classes/shm.json`) in the MacroQuest `config` folder. Every character of that class shares it, and the profile switches when you log in a character of another class.
 
 ## Layouts
 
-A layout is a snapshot of the class profile, the unit frame settings and the list of replaced windows, saved to `MQEQGFX_layouts/<name>.json`:
+A layout is a snapshot of the class profile, the unit frame settings and the list of replaced windows, saved to `MQEQGFX/layouts/<name>.json`:
 
 ```eqcommand
 /eqgfx ui layout list

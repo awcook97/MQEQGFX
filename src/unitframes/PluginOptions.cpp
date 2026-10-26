@@ -218,6 +218,44 @@ void DrawPerformance()
 		ShowDebugWindow(!DebugWindowShown());
 }
 
+void DrawOptionSections()
+{
+	if (ImGui::CollapsingHeader("Windows", ImGuiTreeNodeFlags_DefaultOpen))
+		DrawWindowList();
+
+	if (ImGui::CollapsingHeader("Native UI"))
+		eqgfx::ui::DrawNativeUiOptions();
+
+	if (ImGui::CollapsingHeader("UI layouts"))
+		eqgfx::ui::DrawLayoutOptions();
+
+	if (ImGui::CollapsingHeader("Attack indicator"))
+	{
+		ImGui::PushID("attack");
+		DrawAttackOptions();
+		ImGui::PopID();
+	}
+
+	if (ImGui::CollapsingHeader("Target ring"))
+	{
+		ImGui::PushID("targetring");
+		DrawTargetRingOptions();
+		ImGui::PopID();
+	}
+
+	if (ImGui::CollapsingHeader("Targeting", ImGuiTreeNodeFlags_DefaultOpen))
+		DrawTargeting();
+
+	if (ImGui::CollapsingHeader("World effects"))
+		DrawWorldEffects();
+
+	if (ImGui::CollapsingHeader("Performance"))
+		DrawPerformance();
+
+	if (ImGui::CollapsingHeader("Spell animations"))
+		DrawSpellFxOptions();
+}
+
 } // namespace
 
 void ShowPluginOptions(bool on) { s_shown = on; }
@@ -228,46 +266,20 @@ void DrawPluginOptions()
 	bool open = true;
 	ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_FirstUseEver);
 	if (ImGui::Begin("EQGFX Options", &open, ImGuiWindowFlags_AlwaysAutoResize))
-	{
-		if (ImGui::CollapsingHeader("Windows", ImGuiTreeNodeFlags_DefaultOpen))
-			DrawWindowList();
-
-		if (ImGui::CollapsingHeader("Native UI"))
-			eqgfx::ui::DrawNativeUiOptions();
-
-		if (ImGui::CollapsingHeader("UI layouts"))
-			eqgfx::ui::DrawLayoutOptions();
-
-		if (ImGui::CollapsingHeader("Attack indicator"))
-		{
-			ImGui::PushID("attack");
-			DrawAttackOptions();
-			ImGui::PopID();
-		}
-
-		if (ImGui::CollapsingHeader("Target ring"))
-		{
-			ImGui::PushID("targetring");
-			DrawTargetRingOptions();
-			ImGui::PopID();
-		}
-
-		if (ImGui::CollapsingHeader("Targeting", ImGuiTreeNodeFlags_DefaultOpen))
-			DrawTargeting();
-
-		if (ImGui::CollapsingHeader("World effects"))
-			DrawWorldEffects();
-
-		if (ImGui::CollapsingHeader("Performance"))
-			DrawPerformance();
-
-		if (ImGui::CollapsingHeader("Spell animations"))
-			DrawSpellFxOptions();
-	}
+		DrawOptionSections();
 	ImGui::End();
 
 	if (!open)
 		s_shown = false;
+}
+
+void DrawSettingsPanel()
+{
+	ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.2f, 1.0f), "MQEQGFX Settings");
+	ImGui::Separator();
+	BeginAnimContext();
+	DrawOptionSections();
+	EndAnimContext();
 }
 
 } // namespace eqgfx::unitframes

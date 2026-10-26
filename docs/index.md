@@ -4,7 +4,7 @@ tags:
 resource_link: ""
 support_link: ""
 repository: "https://github.com/RedGuides/MQEQGFX"
-config: "MQEQGFX.json, MQEQGFX_<class>.json"
+config: "MQEQGFX/MQEQGFX.json, MQEQGFX/classes/<class>.json"
 authors: "Andrew Cook"
 tagline: "3D world drawing for Lua, unit frames, spell animations and hover casting"
 ---
@@ -87,13 +87,13 @@ Almost everything is set in game, from the unit frame options panels (`/eqgfx uf
 
 | File | Contents |
 |------|----------|
-| `MQEQGFX.json` | Plugin-wide settings: unit frames, targeting, spell animations, world effects, target ring, attack indicator, performance options, and which stock windows are replaced. |
-| `MQEQGFX_<class>.json` | Per-class settings, named by the class short name (for example `MQEQGFX_shm.json`): window positions, button bar layouts, hot buttons, button sets and chat tabs of the replaced stock windows. Every character of that class shares it. |
-| `MQEQGFX_layouts/<name>.json` | Saved UI layouts, see `/eqgfx ui layout`. |
-| `MQEQGFX_shaders.bin` | Compiled shader cache. Safe to delete; it is rebuilt on the next load. |
-| `eqgfx/*_settings.lua` | Settings of the bundled Lua scripts, see [Lua scripts](lua-scripts.md#settings). |
+| `MQEQGFX/MQEQGFX.json` | Plugin-wide settings: unit frames, targeting, spell animations, world effects, target ring, attack indicator, performance options, and which stock windows are replaced. |
+| `MQEQGFX/classes/<class>.json` | Per-class settings, named by the class short name (for example `classes/shm.json`): window positions, button bar layouts, hot buttons, button sets and chat tabs of the replaced stock windows. Every character of that class shares it. |
+| `MQEQGFX/layouts/<name>.json` | Saved UI layouts, see `/eqgfx ui layout`. |
+| `MQEQGFX/shaders.bin` | Compiled shader cache. Safe to delete; it is rebuilt on the next load. |
+| `MQEQGFX/lua/*_settings.lua` | Settings of the bundled Lua scripts, see [Lua scripts](lua-scripts.md#settings). |
 
-If an older `MQEQGFX.ini` or `MQEQGFX_<class>.ini` exists, it is converted to JSON the first time and left in place.
+If an older `MQEQGFX.ini` or `MQEQGFX_<class>.ini` exists, it is converted to JSON the first time and left beside it. Files from older versions that sit directly in `config/` (`MQEQGFX*.json`, `MQEQGFX_layouts/`, `eqgfx/`, `eqgfx.log`) are moved into `config/MQEQGFX/` the first time the plugin loads.
 
 `MQEQGFX.json` is plain JSON with one object per section:
 

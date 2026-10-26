@@ -74,6 +74,13 @@ private:
 
 File& Global();
 
+std::filesystem::path Dir();
+std::filesystem::path ClassesDir();
+std::filesystem::path LooksDir();
+std::filesystem::path LayoutsDir();
+std::filesystem::path LuaDir();
+void PrepareConfigDirs();
+
 json ReadJson(const std::filesystem::path& path);
 void WriteJson(const std::filesystem::path& path, const json& doc);
 

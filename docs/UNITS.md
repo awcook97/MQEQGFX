@@ -60,39 +60,10 @@ are out of zone will not resolve. `XTar` is bounded by your live slot count.
 
 ### Why your target doesn't change
 
-`CharacterZoneClient::CastSpell` (`0x1400DD130`) takes a gem and a spell but
-never a target — every targeted action is aimed at the global `pTarget`. What
-the decompile shows is that the outgoing packet *snapshots* it:
-
-```c
-if (pinstTarget == NULL) hdr.targetId = 0;
-else                     hdr.targetId = pinstTarget->SpawnID;   // +0x168
-...
-CPacketScrambler::hton(pinstCPacketScrambler, 0xead6);
-EQNetwork::SendPacket(__gWorld, 4, buf, len);
-```
-
-The id is read once, synchronously, into the packet, and copied onto the
-character as the in-progress cast's target (`+0x250`). Nothing reads `pTarget`
-again afterwards.
-
-Separately, the client only *tells the server* about a target change from a
-per-frame diff in `PlayerZoneClient::ChangeTarget` (`0x1400f3b40`):
-
-```c
-DAT_140de5b50 = pinstTarget;                       // shadow: last id sent
-hton(pinstCPacketScrambler, 0x1994);
-<2 bytes opcode><4 bytes spawn id>
-EQNetwork::SendPacket(__gWorld, 4, buf, 6);
-```
-
-It fires **only when `pTarget` differs from that shadow**. `/attarget` swaps
-`pTarget`, runs the command, and swaps back inside a single pulse — so the diff
-never sees a change and **nothing goes on the wire**. The action is already
-aimed; the swap is invisible to both you and the server.
-
-This is also why the command runs with `DoCommand(..., delayed=false)`. A queued
-command would execute *after* the restore and hit the wrong unit.
+`/attarget` swaps your target, runs the command, and swaps back within the same
+pulse. The action lands on the unit you chose, and neither you nor the server
+ever sees a target change. The command runs immediately rather than queued, so
+it cannot land after your target is restored.
 
 ---
 
@@ -260,13 +231,12 @@ at the foot of every panel, or `/eqgfx options`:
 
 * **Windows** — what is open, locked and click-through, how big each one is,
   with a shortcut into each one's panel and buttons to lock them all at once
-* **Targeting** — world hover, focus marker, the fallback chain, the
-  and the buff probe when it is compiled in
+* **Targeting** — world hover, focus marker, the fallback chain
 * **World effects** — the passive class animations and who they draw on, their
   radius, spawn cap, alpha and slot mask, the whole GPU pass, the test ring and
   the damage debug log
 
-Settings live in `MQEQGFX.json`, held in memory: reading one is a lookup, and a
+Settings live in `config/MQEQGFX/MQEQGFX.json`, held in memory: reading one is a lookup, and a
 change is written once changes have been idle a moment, whole, off the game
 thread, so dragging a slider does not write the file sixty times a second. The
 first time, the file is converted from `MQEQGFX.ini`, which is left as it was.
@@ -277,7 +247,6 @@ first time, the file is converted from `MQEQGFX.ini`, which is left as it was.
 | `/eqgfx frames raid` | toggle the raid window |
 | `/eqgfx frames worldhover` | let hovering a spawn in the 3D world set the hover unit |
 | `/eqgfx frames fallback` | `MouseHover` falls back to focus, then target |
-| `/eqgfx frames probe` | ask the server for buffs on units you have not targeted |
 
 ### Focus — `/eqgfx focus`
 
@@ -298,8 +267,8 @@ belongs to the target window and nowhere else.
 /eqgfx focus window       toggle the panel
 ```
 
-The cast bar is fed by the `CEverQuest::StartCasting` tap the moment the packet
-lands, so you can watch a mob's cast without ever selecting it.
+The cast bar starts the moment the cast does, so you can watch a mob's cast
+without ever selecting it.
 
 ### Extended Targets — `/eqgfx xtarget`
 
@@ -317,8 +286,8 @@ same hover unit — which is how `MouseHover` works for damage as well as heals:
 /eqgfx units
 ```
 
-Prints focus, hover, which windows are open, click gem, fallback mode, probe
-state, and how many cast bars are live.
+Prints focus, hover, which windows are open, click gem, fallback mode, and how
+many cast bars are live.
 
 ---
 
@@ -328,18 +297,16 @@ Buffs come from the data, not from the UI. There are exactly three stores:
 
 | Whose | Where it is read from |
 |---|---|
-| Yours | `GetPcProfile()->GetEffect(i)` — the character profile's own effect array, which is what `${Me.Buff[n]}` and `${Me.Song[n]}` read and what the buff and song windows are *drawn from* |
-| Anyone else's | MacroQuest's cached buff map, filled by its detour on `CTargetWnd::RefreshTargetBuffs` straight out of the buff packet. Same store as `${Target.Buff[n]}` |
-| Your pet's | the one genuine exception — see below |
+| Yours | your own buffs and songs, the same as `${Me.Buff[n]}` and `${Me.Song[n]}` |
+| Anyone else's | MacroQuest's cached buffs, the same store as `${Target.Buff[n]}` |
+| Your pet's | the pet window — see below |
 
-The cache is keyed by the spawn id in the packet header — not "current target" —
-so it covers anyone the server has ever sent buffs about. It sends nothing and
-costs nothing.
+The cache covers anyone the server has ever sent buffs about, not only your
+current target. It sends nothing and costs nothing.
 
-**The pet.** The client keeps pet buffs in one place only: the pet info window's
-own `Buffs` array. There is no packet-level store for them the way there is for
-everyone else, and `${Pet.Buff[n]}` reads that array too. `pet buffs from the pet
-window` is on by default for that reason; turn it off and pet buffs come from the
+**The pet.** The client keeps pet buffs in the pet window only, and
+`${Pet.Buff[n]}` reads them from there too. `pet buffs from the pet window` is on
+by default for that reason; turn it off and pet buffs come from the
 same targeting cache as a stranger's, which means only after you have targeted
 your pet.
 
@@ -348,31 +315,8 @@ every`, 250 ms by default) rather than every frame. A buff list recomputed a
 hundred times a second to show the same eight icons was most of what a row used
 to cost.
 
-The gap: the server only *volunteers* a spawn's buffs when it believes that
-spawn is your target, so the cache can never answer "what is on someone I have
-never clicked".
-
-`/eqgfx frames probe` closes that gap. It is **compiled out** unless eqlib
-publishes a `TargetNotifyPacket_x` offset for the client you built against — the
-opcode moves every patch — and **off by default** even then, because it is the
-one part of this feature that puts packets on the wire. It sends the
-6-byte `0x1994` target notification by hand for the unit you want, then
-immediately another for your real target. The server answers the first with a
-buff packet (which MQ caches by spawn id) and the second restores its
-bookkeeping. `pTarget` is never touched, so nothing flickers locally.
-
-Rate limited to one probe per 750 ms with a 15 s per-spawn cooldown. The focus
-and hovered units are kept warm automatically.
-
-**The cost, plainly:** between those two packets the server believes you are
-targeting someone you are not. Anything server-side that reads your target in
-that window — another player's `/assist`, for instance — sees the probe target.
-It is a very small window, but it is not zero, which is why you have to ask for
-it.
-
-Everything else here — frame clicks, `/attarget`, the Lua `cast_at` binding —
-restores `pTarget` inside the same pulse, so the client's target diff never
-fires and nothing goes out.
+The server only sends a spawn's buffs while that spawn is your target, so a unit
+you have never targeted shows no buffs.
 
 ---
 

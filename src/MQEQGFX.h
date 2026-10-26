@@ -5,7 +5,6 @@
 #endif
 
 #include <mq/Plugin.h>
-
 #include "Detours.h"
 
 #include "model/eqg.h"

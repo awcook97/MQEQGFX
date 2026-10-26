@@ -355,15 +355,15 @@ ImVec2 PerimeterAt(const ImVec2& lo, const ImVec2& hi, float s)
 {
 	const float w = hi.x - lo.x, h = hi.y - lo.y;
 	if (s < w)
-		return ImVec2(lo.x + s, lo.y);
+		return {lo.x + s, lo.y};
 	s -= w;
 	if (s < h)
-		return ImVec2(hi.x, lo.y + s);
+		return {hi.x, lo.y + s};
 	s -= h;
 	if (s < w)
-		return ImVec2(hi.x - s, hi.y);
+		return {hi.x - s, hi.y};
 	s -= w;
-	return ImVec2(lo.x, hi.y - s);
+	return {lo.x, hi.y - s};
 }
 
 void PerimeterRun(ImDrawList* dl, const ImVec2& lo, const ImVec2& hi, float a, float b, ImU32 col, float thick)

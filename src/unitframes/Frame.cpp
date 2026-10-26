@@ -97,8 +97,8 @@ float Ratio(int64_t current, int64_t max)
 ImVec4 Lerp(const ImVec4& a, const ImVec4& b, float t)
 {
 	t = std::clamp(t, 0.0f, 1.0f);
-	return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-		a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+	return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+		a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t};
 }
 
 ImVec4 HealthColor(float pct, const FrameColors& c)
@@ -232,7 +232,7 @@ ImVec2 SnapPos(const ImVec2& p, const TextStyle& ts)
 {
 	if (!ts.pixelSnap)
 		return p;
-	return ImVec2(std::floor(p.x + 0.5f), std::floor(p.y + 0.5f));
+	return {std::floor(p.x + 0.5f), std::floor(p.y + 0.5f)};
 }
 
 void DrawLabel(ImDrawList* dl, const ImVec2& rawPos, ImU32 col, const char* text,
@@ -544,7 +544,7 @@ const char* ClassShort(const PlayerClient* sp)
 std::string DisplayName(const PlayerClient* sp, const TextStyle& text)
 {
 	if (!sp)
-		return std::string();
+		return {};
 
 	std::string name = sp->DisplayedName;
 
@@ -682,7 +682,7 @@ PlayerClient* ValidateSpawn(PlayerClient* sp)
 ImVec2 MousePos()
 {
 	if (MQMouseInfo* m = EQADDR_MOUSE)
-		return ImVec2(static_cast<float>(m->X), static_cast<float>(m->Y));
+		return {static_cast<float>(m->X), static_cast<float>(m->Y)};
 	return ImGui::GetIO().MousePos;
 }
 
@@ -702,7 +702,7 @@ void NoteHotRect(Window w, const ImVec2& lo, const ImVec2& hi)
 {
 	const int i = static_cast<int>(w);
 	if (i >= 0 && i < kWindowCount)
-		s_rowRects[i].push_back(ImVec4(lo.x, lo.y, hi.x, hi.y));
+		s_rowRects[i].emplace_back(lo.x, lo.y, hi.x, hi.y);
 }
 
 void NoteHotItem(Window w)
@@ -926,7 +926,7 @@ RowResult DrawUnitRow(PlayerClient* sp, Window src, const RowOptions& opts, floa
 
 	{
 		if (wi >= 0 && wi < kWindowCount)
-			s_rowRects[wi].push_back(ImVec4(start.x, start.y, end.x, end.y));
+			s_rowRects[wi].emplace_back(start.x, start.y, end.x, end.y);
 	}
 
 	const float rawPct = PctHP(sp);
