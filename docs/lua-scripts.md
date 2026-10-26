@@ -124,7 +124,7 @@ All layers share one drawing budget, served in the order markers, casts, ambient
 
 ## Settings
 
-The scripts save their settings under `<MQ>/config/eqgfx/`. Each file is a Lua table with one section per script:
+The scripts save their settings under `<MQ>/config/MQEQGFX/lua/`. Each file is a Lua table with one section per script:
 
 | File | Scope |
 |------|-------|
@@ -144,7 +144,7 @@ return {
 
 Changes are written half a second after the last edit. Editing these files by hand is not necessary; use the settings windows.
 
-The scripts log to `<MQ>/config/eqgfx.log`. When it reaches 1 MB it is moved to `eqgfx.log.old` and a new log starts.
+The scripts log to `<MQ>/config/MQEQGFX/eqgfx.log`. When it reaches 1 MB it is moved to `eqgfx.log.old` and a new log starts.
 
 ## Troubleshooting
 

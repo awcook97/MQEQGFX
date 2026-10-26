@@ -45,8 +45,6 @@ eqgfx.shutdown()                -- on script exit (drops your queued primitives)
   (MQ Lua states are isolated) wrapping one shared native scene, so your
   script coexists with nameplates and indicators without coordination.
   MQ2Lua stops scripts using the module if the plugin unloads.
-- Compatibility flag: `eqgfx.ui_native` is always `true` (the native EQ window
-  scan is built in).
 
 ---
 
@@ -271,22 +269,19 @@ provides the rects:
 local uirects = require('eqgfx.lib.uirects')
 
 -- inside your imgui callback:
-local rects, native = uirects.get()          -- one cheap native call; {x0,y0,x1,y1,name=...}
 local drawList = ImGui.GetBackgroundDrawList()
-if native and #rects > 0 then
-  local sw, sh = eqgfx.get_screen()
-  for _, r in ipairs(uirects.regions(rects, sw, sh)) do
-    drawList:PushClipRect(ImVec2(r[1], r[2]), ImVec2(r[3], r[4]), false)
-    draw_everything(drawList)                -- your drawing, once per region
-    drawList:PopClipRect()
-  end
-else
-  draw_everything(drawList)
+local sw, sh = eqgfx.get_screen()
+for _, r in ipairs(uirects.regions(sw, sh)) do
+  drawList:PushClipRect(ImVec2(r[1], r[2]), ImVec2(r[3], r[4]), false)
+  draw_everything(drawList)                -- your drawing, once per region
+  drawList:PopClipRect()
 end
 ```
 
-`uirects.subtract(bbox, rects)` does the same subtraction against a single
-rectangle; nameplates uses it to clip one plate at a time. Engine primitives
+`uirects.visible(x0, y0, x1, y1)` does the same subtraction against a single
+rectangle and returns nil when no window overlaps it; nameplates uses it to
+clip one plate at a time. `uirects.get()` lists the open windows as
+`{x0, y0, x1, y1, name = ...}`. Engine primitives
 never need any of this; they're under the UI already.
 
 ---
@@ -364,7 +359,7 @@ the `casts.now()` / `os.clock()` base — never mix them with a frame counter.
 Notes:
 
 - Other spawns' casts are read from the plugin cast feed when it's live on this
-  build (`casts.feed_live()` / `eqgfx.start_casting_addr() ~= 0`); when the feed
+  build (`casts.feed_live()` / `eqgfx.cast_feed_live()`); when the feed
   isn't available the tracker detects them from the "begins to cast" chat line
   instead. The two paths differ in what they can know: the feed gives the
   server's real remaining time and needs no chat, while the chat fallback
@@ -478,9 +473,9 @@ against exposes the matching client hook — the cast-start hook for
 isn't exposed, the plugin still loads normally, but that feed's `poll_*()`
 **always returns an empty table**.
 
-Check the cast feed at runtime with `eqgfx.start_casting_addr() ~= 0`, or run
+Check the cast feed at runtime with `eqgfx.cast_feed_live()`, or run
 bare `/eqgfx`, which prints the cast feed state (and
-`StartCasting offset not available in this build` when the hook is missing).
+`cast tracking unavailable on this client` when the hook is missing).
 
 ### `${Spawn[...].CastTimeLeft}`
 

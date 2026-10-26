@@ -19,7 +19,7 @@ tags:
 Controls MQEQGFX: unit frames, focus and hover casting, spell animations, world effects, stock window replacement and performance options. With no arguments it prints the plugin status; `/eqgfx help` lists every subcommand.
 <!--cmd-desc-end-->
 
-Most of these settings are also in the plugin options window (`/eqgfx options`) and are saved to `MQEQGFX.json`.
+Most of these settings are also in the MacroQuest settings window under plugins/MQEQGFX (or the plugin options window, `/eqgfx options`) and are saved to `MQEQGFX/MQEQGFX.json`.
 
 ## Options
 

@@ -24,8 +24,8 @@ Drop the Lua folder into your MacroQuest `lua/` directory:
 
 and make sure `MQEQGFX.dll` is in your MacroQuest `plugins/` folder. If you
 aren't building it yourself, take both the DLL and the `lua/eqgfx/` folder from
-the release zip (it unpacks straight into your MacroQuest tree); to build it
-from source in the MacroQuest tree, see [DEVELOPING.md](DEVELOPING.md).
+the release zip (it unpacks straight into your MacroQuest folder); to build it,
+see [DEVELOPING.md](DEVELOPING.md).
 
 ## Run
 
@@ -224,7 +224,7 @@ written only when something changed.
 - **Updating the plugin**: `/plugin MQEQGFX unload`, replace the DLL, then
   `/plugin MQEQGFX`. No game restart needed.
 - **No cast bars / indicators for other spawns**: on builds with the plugin
-  cast feed live (`eqgfx.start_casting_addr() ~= 0`, i.e. `casts.feed_live()`
+  cast feed live (`eqgfx.cast_feed_live()`, i.e. `casts.feed_live()`
   is true), other spawns' casts come from the feed and don't depend on chat. On
   builds without the feed, detection falls back to the "begins to cast" chat
   line — there, make sure those messages aren't filtered off. Either way this

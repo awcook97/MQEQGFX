@@ -1,5 +1,4 @@
 #include "Suppress.h"
-#include "../Detours.h"
 #include "Actions.h"
 #include "ChatLog.h"
 #include "ClassProfile.h"

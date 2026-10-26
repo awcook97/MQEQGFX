@@ -5,6 +5,7 @@
 namespace eqgfx::spellfx {
 
 namespace {
+
 LOOK(kPalTouch, "touch",
 	G(IM, Glyph_Hand, 1.1f, 8.5f, 4, 1, GA_Drop, 0, FIX, kHoly, 2.4f),
 	F(IM, FxForm_Flame, 0.8f, 9.0f, 72, 18, 0.1f, 2.8f, 0, FIX, kHoly, 2.2f, 0.07f, ADD, 1, 0.45f),

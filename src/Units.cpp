@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 namespace {
+
 std::mutex                            s_unitMutex;
 std::unordered_map<int, UnitCast>     s_casts;
 

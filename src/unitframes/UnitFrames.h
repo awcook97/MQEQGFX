@@ -420,6 +420,7 @@ void BuildSharedPanel(SettingsPanel& panel, WindowSettings& cfg);
 void ShowPluginOptions(bool on);
 bool PluginOptionsShown();
 void DrawPluginOptions();
+void DrawSettingsPanel();
 
 void Draw();
 

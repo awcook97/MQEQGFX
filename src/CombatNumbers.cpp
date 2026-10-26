@@ -82,6 +82,7 @@ void DumpRawReport(const char* tag, const uint8_t* p, size_t n)
 #if defined(CEverQuest__ReportSuccessfulHit_x) && defined(CEverQuest__ReportSuccessfulHeal_x)
 
 namespace {
+
 class CEverQuestDmgHook
 {
 public:

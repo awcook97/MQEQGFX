@@ -68,11 +68,11 @@ Runs a command against `2Tar`, `Group1`-`Group6`, `Raid1`-`Raid72`, `XTar1`-`XTa
 
 ### Configuration File
 
-Settings are saved in the MacroQuest `config` folder: `MQEQGFX.json` for plugin-wide settings, `MQEQGFX_<class>.json` for per-class window layouts and hot buttons, and `MQEQGFX_layouts/` for saved layouts. `MQEQGFX_shaders.bin` is a compiled shader cache and safe to delete. The bundled scripts save to `config/eqgfx/`.
+Settings are saved in `config/MQEQGFX/`: `MQEQGFX.json` for plugin-wide settings, `classes/<class>.json` for per-class window layouts and hot buttons, and `layouts/` for saved layouts. `shaders.bin` is a compiled shader cache and safe to delete. The bundled scripts save to `config/MQEQGFX/lua/`. Files from older versions are moved there on first load.
 
 ## Other Notes
 
-MQEQGFX builds like any other MacroQuest plugin: place it under the MacroQuest `plugins` folder and add `MQEQGFX.vcxproj` to the solution, or build it through CMake. Its vcpkg dependencies are listed in `vcpkg_mq.txt`. It requires the 64-bit DirectX 11 client.
+Its vcpkg dependencies are listed in `vcpkg_mq.txt`. It requires the 64-bit DirectX 11 client.
 
 ### Documentation
 
@@ -82,4 +82,3 @@ MQEQGFX builds like any other MacroQuest plugin: place it under the MacroQuest `
 * [Stock windows](docs/native-ui.md)
 * [Lua API](docs/lua-eqgfx.md)
 * [Lua scripts](docs/lua-scripts.md)
-

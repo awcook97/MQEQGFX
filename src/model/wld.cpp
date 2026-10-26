@@ -61,9 +61,9 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 	for (size_t i = 0; i < sh.size(); ++i) sh[i] = static_cast<char>(sh[i] ^ kKey[i & 7]);
 
 	auto getName = [&](int32_t ref) -> std::string {
-		if (ref >= 0) return std::string();
+		if (ref >= 0) return {};
 		size_t off = 0u - static_cast<uint32_t>(ref);
-		if (off >= sh.size()) return std::string();
+		if (off >= sh.size()) return {};
 		size_t e = off;
 		while (e < sh.size() && sh[e] != '\0') ++e;
 		return std::string(&sh[off], e - off);
@@ -229,11 +229,11 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 	}
 
 	auto texFromFrag03 = [&](uint32_t ref) -> std::string {
-		if (ref == 0 || ref >= frags.size() || frags[ref].id != 0x03) return std::string();
+		if (ref == 0 || ref >= frags.size() || frags[ref].id != 0x03) return {};
 		const Frag& f = frags[ref];
-		if (f.sz < 10) return std::string();
+		if (f.sz < 10) return {};
 		int16_t ln = ri16(f.d, 8);
-		if (ln <= 0 || 10 + static_cast<size_t>(ln) > f.sz) return std::string();
+		if (ln <= 0 || 10 + static_cast<size_t>(ln) > f.sz) return {};
 		std::string s(reinterpret_cast<const char*>(f.d) + 10, static_cast<size_t>(ln));
 		for (size_t k = 0; k < s.size(); ++k) s[k] = static_cast<char>(s[k] ^ kKey[k & 7]);
 		while (!s.empty() && s.back() == '\0') s.pop_back();
@@ -241,9 +241,9 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 	};
 
 	auto texFromFrag05 = [&](int32_t ref05) -> std::string {
-		if (ref05 <= 0 || static_cast<uint32_t>(ref05) >= frags.size()) return std::string();
+		if (ref05 <= 0 || static_cast<uint32_t>(ref05) >= frags.size()) return {};
 		const Frag& f5 = frags[ref05];
-		if (f5.id != 0x05 || f5.sz < 8) return std::string();
+		if (f5.id != 0x05 || f5.sz < 8) return {};
 		for (size_t co = 0; co < 8; co += 4)
 		{
 			int32_t cand = ri32(f5.d, co);
@@ -259,7 +259,7 @@ bool ParseCharacter(const uint8_t* data, size_t size, const std::string& raceCod
 				if (!t.empty()) return t;
 			}
 		}
-		return std::string();
+		return {};
 	};
 
 	auto resolveMaterials = [&](uint32_t listRef) -> int {
@@ -444,9 +444,9 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	std::vector<char> sh(data + 28, data + 28 + strHashSize);
 	for (size_t i = 0; i < sh.size(); ++i) sh[i] = static_cast<char>(sh[i] ^ kKey[i & 7]);
 	auto getName = [&](int32_t ref) -> std::string {
-		if (ref >= 0) return std::string();
+		if (ref >= 0) return {};
 		size_t off = 0u - static_cast<uint32_t>(ref);
-		if (off >= sh.size()) return std::string();
+		if (off >= sh.size()) return {};
 		size_t e = off; while (e < sh.size() && sh[e] != '\0') ++e;
 		return std::string(&sh[off], e - off);
 	};
@@ -465,20 +465,20 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 	}
 
 	auto texFromFrag03 = [&](uint32_t ref) -> std::string {
-		if (ref == 0 || ref >= frags.size() || frags[ref].id != 0x03) return std::string();
+		if (ref == 0 || ref >= frags.size() || frags[ref].id != 0x03) return {};
 		const Frag& f = frags[ref];
-		if (f.sz < 10) return std::string();
+		if (f.sz < 10) return {};
 		int16_t ln = ri16(f.d, 8);
-		if (ln <= 0 || 10 + static_cast<size_t>(ln) > f.sz) return std::string();
+		if (ln <= 0 || 10 + static_cast<size_t>(ln) > f.sz) return {};
 		std::string s(reinterpret_cast<const char*>(f.d) + 10, static_cast<size_t>(ln));
 		for (size_t k = 0; k < s.size(); ++k) s[k] = static_cast<char>(s[k] ^ kKey[k & 7]);
 		while (!s.empty() && s.back() == '\0') s.pop_back();
 		return s;
 	};
 	auto texFromFrag05 = [&](int32_t ref05) -> std::string {
-		if (ref05 <= 0 || static_cast<uint32_t>(ref05) >= frags.size()) return std::string();
+		if (ref05 <= 0 || static_cast<uint32_t>(ref05) >= frags.size()) return {};
 		const Frag& f5 = frags[ref05];
-		if (f5.id != 0x05 || f5.sz < 8) return std::string();
+		if (f5.id != 0x05 || f5.sz < 8) return {};
 		for (size_t co = 0; co < 8; co += 4)
 		{
 			int32_t cand = ri32(f5.d, co);
@@ -494,7 +494,7 @@ bool MergeHeadMesh(const uint8_t* data, size_t size, const std::string& meshName
 				if (!t.empty()) return t;
 			}
 		}
-		return std::string();
+		return {};
 	};
 
 	const std::string want = upper(meshName);

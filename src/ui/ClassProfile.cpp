@@ -201,8 +201,8 @@ void UpdateProfile()
 		s_windows.clear();
 		if (!cls.empty())
 		{
-			const std::filesystem::path folder = std::filesystem::path(gPathConfig);
-			s_file.Open(folder / ("MQEQGFX_" + cls + ".json"), folder / ("MQEQGFX_" + cls + ".ini"), ImportClassIni);
+			const std::filesystem::path folder = settings::ClassesDir();
+			s_file.Open(folder / (cls + ".json"), folder / (cls + ".ini"), ImportClassIni);
 			LoadWindows();
 		}
 	}

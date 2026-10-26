@@ -19,7 +19,7 @@ log.SetColors(true)
 log.SetIncludeCharacter('Server.Character.Zone')
 log.SetIncludeTime('milliseconds')
 log.SetLevel(log.INFO)
-log.SetOutputFile(mq.configDir .. '/eqgfx.log')
+log.SetOutputFile(mq.configDir .. '/MQEQGFX/eqgfx.log')
 
 pause.wait_for_game()
 
@@ -131,8 +131,8 @@ local classCache = {}
 local function class_of(id, spawn)
   local hit = classCache[id]
   if hit ~= nil then return hit or nil end
-  spawn = spawn or mq.TLO.Spawn('id ' .. id)
-  local short = try(function() return spawn.Class.ShortName() end)
+  local source = spawn or mq.TLO.Spawn('id ' .. id)
+  local short = try(function() return source.Class.ShortName() end)
   if type(short) ~= 'string' or short == '' then short = nil end
   classCache[id] = short or false
   return short
@@ -140,7 +140,9 @@ end
 
 ---@class AmbientTarget
 ---@field id integer
----@field x number @field y number @field z number
+---@field x number
+---@field y number
+---@field z number
 ---@field dist number
 ---@field class string|nil # Spawn.Class.ShortName(), nil when unreadable
 
@@ -211,11 +213,16 @@ end
 ---@class CastFx
 ---@field shape CastShape
 ---@field color RGBA
----@field x number @field y number @field z number   # caster position, frozen at release
----@field tx number @field ty number @field tz number # victim position
+---@field x number   # caster position, frozen at release
+---@field y number
+---@field z number
+---@field tx number  # victim position
+---@field ty number
+---@field tz number
 ---@field heading number # caster facing, radians
 ---@field reach number
----@field coneStart number @field coneEnd number
+---@field coneStart number
+---@field coneEnd number
 ---@field bornAt number
 ---@field life number
 ---@field fizzle boolean
@@ -444,7 +451,7 @@ while true do
           if S.over() then break end
           if (fxcfg.selfCasts or not info.isSelf) and not bursts[id] then
             local x, y, z = spawn_pos(id)
-            if x then
+            if x and y and z then
               local class = castfx.classify(info.spellID)
               local pct = casts.progress(info, casts.now())
               castfx.draw_charge(x, y, z, class, castfx.color(class, fxcfg), fxcfg,

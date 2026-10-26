@@ -29,6 +29,7 @@ bool s_castTapFailed     = false;
 bool s_castTrackerOwned  = false;
 
 namespace {
+
 using fEqgfxCastCallback          = void (*)(int spellId, int spawnId, uint32_t castTimeMs);
 using fAddStartCastingCallback    = int  (*)(fEqgfxCastCallback);
 using fRemoveStartCastingCallback = void (*)(int);

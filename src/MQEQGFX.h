@@ -6,8 +6,6 @@
 
 #include <mq/Plugin.h>
 
-#include "Detours.h"
-
 #include "model/eqg.h"
 #include "model/dds.h"
 #include "model/render.h"

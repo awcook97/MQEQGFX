@@ -440,7 +440,7 @@ end
 
 ### eqgfx.lib.settings
 
-Saves a script's settings with `mq.pickle` in the same files as the bundled scripts (`<MQ>/config/eqgfx/`), per character, per class or for everyone.
+Saves a script's settings with `mq.pickle` in the same files as the bundled scripts (`<MQ>/config/MQEQGFX/lua/`), per character, per class or for everyone.
 
 ```lua
 local Store = require('eqgfx.lib.settings')
