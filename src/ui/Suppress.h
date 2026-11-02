@@ -54,6 +54,21 @@ struct UiDebug
 };
 UiDebug& Debug();
 
+struct MirrorRow
+{
+	std::string name;
+	bool        ours = false;
+	bool        mirrored = false;
+	std::string reason;
+};
+
+bool MirrorEnabled();
+void SetMirror(bool on);
+bool IsMirrored(const eqlib::CXWnd* wnd);
+bool HiddenByUs(const eqlib::CXWnd* wnd);
+int  MirroredCount();
+std::vector<MirrorRow> MirrorReport();
+
 bool DrawHookInstalled();
 int  HiddenCount();
 

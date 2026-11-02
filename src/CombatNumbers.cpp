@@ -29,10 +29,10 @@ void RecordHitEvent(const EQSuccessfulHit& hit)
 	if (s_dmgDebug.load(std::memory_order_relaxed))
 	{
 		char tags[128] = "";
-		if (hit.Flags & HitFlag_Critical) strcat_s(tags, " crit");
-		if (hit.Flags & HitFlag_Lucky)    strcat_s(tags, " lucky");
-		if (hit.Flags & HitFlag_Twincast) strcat_s(tags, " twincast");
-		if (hit.Flags & HitFlag_Locked)   strcat_s(tags, " locked");
+		if (hit.Flags & SuccessfulHitFlag_Critical)      strcat_s(tags, " crit");
+		if (hit.Flags & SuccessfulHitFlag_Lucky)         strcat_s(tags, " lucky");
+		if (hit.Flags & SuccessfulHitFlag_Twincast)      strcat_s(tags, " twincast");
+		if (hit.Flags & SuccessfulHitFlag_Locked)        strcat_s(tags, " locked");
 		if (hit.Flags & SuccessfulHitFlag_Riposte)       strcat_s(tags, " riposte");
 		if (hit.Flags & SuccessfulHitFlag_FinishingBlow) strcat_s(tags, " finishing");
 		if (hit.Flags & SuccessfulHitFlag_Flurry)        strcat_s(tags, " flurry");
@@ -59,9 +59,9 @@ void RecordHealEvent(const EQSuccessfulHeal& heal)
 	if (s_dmgDebug.load(std::memory_order_relaxed))
 	{
 		char tags[48] = "";
-		if (heal.EffectBitmask & HealFlag_Critical) strcat_s(tags, " crit");
-		if (heal.EffectBitmask & HealFlag_Lucky)    strcat_s(tags, " lucky");
-		if (heal.EffectBitmask & HealFlag_Twincast) strcat_s(tags, " twincast");
+		if (heal.EffectBitmask & SuccessfulHealFlag_Critical) strcat_s(tags, " crit");
+		if (heal.EffectBitmask & SuccessfulHealFlag_Lucky)    strcat_s(tags, " lucky");
+		if (heal.EffectBitmask & SuccessfulHealFlag_Twincast) strcat_s(tags, " twincast");
 		if (heal.EffectBitmask & (SuccessfulHealFlag_OverTime | SuccessfulHealFlag_OverTimeChannel)) strcat_s(tags, " hot");
 		WriteChatf("\ag[MQEQGFX]\ax \atHEAL\ax healed=%d healer=%d actual=%lld total=%lld spell=%d flags=0x%X%s t=%u",
 			heal.HealedID, heal.HealerID, static_cast<long long>(heal.ActualHeal),
