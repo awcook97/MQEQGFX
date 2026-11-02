@@ -28,6 +28,7 @@ void Write()
 		list += w.name;
 	}
 	settings::Global().Set(kSection, "Replace", list);
+	settings::Global().Set(kSection, "Mirror", MirrorEnabled());
 }
 
 const char* SkinName(Skin skin)
@@ -127,6 +128,7 @@ void LoadUiSettings()
 	for (const std::string& name : split(list, ','))
 		if (SkinnedWindow* w = TryAddSkinned(name))
 			w->replace = true;
+	SetMirror(settings::Global().GetBool(kSection, "Mirror", false));
 	s_loaded = true;
 	s_dirty = false;
 }
@@ -155,6 +157,11 @@ void FlushUiSettings()
 
 void DrawNativeUiOptions()
 {
+	bool mirror = MirrorEnabled();
+	if (ImGui::Checkbox("Mirror UI", &mirror))
+		SetMirror(mirror);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("redraw every other stock window in place; a window with a control we cannot draw yet stays stock");
 	ImGui::TextWrapped("Checked windows are hidden. The unit frames stand in for the player, target, group, "
 		"pet, raid, buff and casting windows; spell gems, hot bars and the spell book get windows of our own "
 		"that act directly, laid out and stored per class; anything else is redrawn in place and still "
@@ -180,10 +187,33 @@ void DrawNativeUiDebug()
 	for (const SkinnedWindow& w : SkinnedWindows())
 		if (w.wnd)
 			total += w.drawUs;
-	ImGui::Text("window replacement %s, %d windows hidden, %.1f us to draw ours, client draws last pulse: %u",
-		DrawHookInstalled() ? "active" : "inactive", HiddenCount(), total, EqDrawsLastPulse());
+	ImGui::Text("draw hook %s, %d windows hidden, %.1f us to draw ours, client draws last pulse: %u",
+		DrawHookInstalled() ? "on" : "off", HiddenCount(), total, EqDrawsLastPulse());
 
 	DrawWindowRows(true);
+
+	if (ImGui::CollapsingHeader("mirror ui coverage"))
+	{
+		ImGui::Text("%d windows mirrored", MirroredCount());
+		if (ImGui::BeginTable("##mirror", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
+		{
+			ImGui::TableSetupColumn("window");
+			ImGui::TableSetupColumn("state");
+			ImGui::TableSetupColumn("first control we cannot draw");
+			ImGui::TableHeadersRow();
+			for (const MirrorRow& row : MirrorReport())
+			{
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(row.name.c_str());
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(row.ours ? "native" : row.mirrored ? "mirror" : "stock");
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(row.reason.c_str());
+			}
+			ImGui::EndTable();
+		}
+	}
 }
 
 } // namespace eqgfx::ui

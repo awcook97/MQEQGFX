@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <unordered_set>
 
 namespace eqgfx::ui {
 
@@ -58,6 +59,9 @@ constexpr size_t kMaxHidden = 64;
 std::array<const CXWnd*, kMaxHidden> s_hidden = {};
 size_t s_hiddenCount = 0;
 
+bool s_mirror = false;
+std::unordered_set<const CXWnd*> s_mirrored;
+
 bool s_hookInstalled = false;
 bool s_hookTried = false;
 std::vector<CXWnd*> s_chatTops;
@@ -80,8 +84,13 @@ public:
 	int DoAllDrawing_Detour()
 	{
 		const CXWnd* self = reinterpret_cast<const CXWnd*>(this);
-		if (s_hiddenCount && !self->GetParentWindow() && IsHidden(self))
-			return 0;
+		if (!self->GetParentWindow())
+		{
+			if (s_hiddenCount && IsHidden(self))
+				return 0;
+			if (!s_mirrored.empty() && !s_debug.keepNative && s_mirrored.count(self))
+				return 0;
+		}
 		return DoAllDrawing_Trampoline();
 	}
 };
@@ -266,6 +275,7 @@ void ForgetWindows()
 	s_bagWnds.clear();
 	s_chatTops.clear();
 	s_hiddenCount = 0;
+	s_mirrored.clear();
 	for (SkinnedWindow& w : s_windows)
 	{
 		w.wnd = nullptr;
@@ -286,10 +296,32 @@ bool SetReplace(SkinnedWindow& w, bool on)
 
 void ListWindows()
 {
-	WriteChatf("\ag[MQEQGFX]\ax native ui: window replacement %s, %d hidden", s_hookInstalled ? "\agactive\ax" : "\arinactive\ax", HiddenCount());
+	WriteChatf("\ag[MQEQGFX]\ax native ui: draw hook %s, %d hidden", s_hookInstalled ? "\agon\ax" : "\aroff\ax", HiddenCount());
 	for (const SkinnedWindow& w : s_windows)
 		WriteChatf("\ag[MQEQGFX]\ax   %s %s%s", w.replace ? "\ag[ours]\ax  " : "\a-w[stock]\ax ", w.name.c_str(),
 			w.wnd ? "" : " \a-w(not loaded)\ax");
+}
+
+void PulseMirror()
+{
+	if (!s_mirror || !s_hookInstalled || !pWndMgr)
+		return;
+	for (CXWnd* top : pWndMgr->pWindows)
+	{
+		if (!top || top->GetParentWindow() || !top->IsVisible() || IsHidden(top))
+			continue;
+		if (!FirstUncovered(top))
+			s_mirrored.insert(top);
+	}
+}
+
+void ListMirror()
+{
+	WriteChatf("\ag[MQEQGFX]\ax mirror ui: %s, %d drawn", s_mirror ? "\agon\ax" : "\aroff\ax", MirroredCount());
+	WriteChatf("\ag[MQEQGFX]\ax %s", MapStatus().c_str());
+	for (const MirrorRow& row : MirrorReport())
+		WriteChatf("\ag[MQEQGFX]\ax   %s %s%s%s", row.ours ? "\ag[native]\ax" : row.mirrored ? "\ag[mirror]\ax" : "\a-w[stock]\ax ",
+			row.name.c_str(), row.reason.empty() ? "" : " \a-w", row.reason.c_str());
 }
 
 } // namespace
@@ -298,6 +330,47 @@ std::vector<SkinnedWindow>& SkinnedWindows() { return s_windows; }
 UiDebug& Debug()                              { return s_debug; }
 bool DrawHookInstalled()                      { return s_hookInstalled; }
 int  HiddenCount()                            { return static_cast<int>(s_hiddenCount); }
+bool MirrorEnabled()                          { return s_mirror; }
+bool IsMirrored(const CXWnd* wnd)             { return s_mirrored.count(wnd) != 0; }
+bool HiddenByUs(const CXWnd* wnd)             { return IsHidden(wnd); }
+int  MirroredCount()                          { return static_cast<int>(s_mirrored.size()); }
+
+void SetMirror(bool on)
+{
+	if (s_mirror == on)
+		return;
+	s_mirror = on;
+	if (!on)
+		s_mirrored.clear();
+	MarkUiSettingsDirty();
+}
+
+std::vector<MirrorRow> MirrorReport()
+{
+	std::vector<MirrorRow> rows;
+	if (!pWndMgr || GetGameState() != GAMESTATE_INGAME)
+		return rows;
+	for (CXWnd* top : pWndMgr->pWindows)
+	{
+		if (!top || top->GetParentWindow() || !top->IsVisible())
+			continue;
+		MirrorRow row;
+		const CXStr* name = top->GetWindowName();
+		row.name = name ? name->c_str() : "(unnamed)";
+		row.ours = IsHidden(top) && !IsMirrored(top);
+		row.mirrored = IsMirrored(top);
+		if (!row.ours && !row.mirrored)
+		{
+			if (const char* uncovered = FirstUncovered(top))
+				row.reason = uncovered;
+			else if (!s_mirror)
+				row.reason = "mirror off";
+
+		}
+		rows.push_back(std::move(row));
+	}
+	return rows;
+}
 
 SkinnedWindow* FindSkinned(std::string_view name)
 {
@@ -361,6 +434,7 @@ void ShutdownNativeUi()
 		}
 	}
 	RemoveDrawHook();
+	ShutdownControls();
 	FlushUiSettings();
 	FlushProfile();
 	ForgetWindows();
@@ -374,6 +448,7 @@ void PulseNativeUi()
 	PulseUiSettings();
 
 	s_hiddenCount = 0;
+	s_mirrored.clear();
 	if (GetGameState() != GAMESTATE_INGAME)
 	{
 		for (SkinnedWindow& w : s_windows)
@@ -419,11 +494,12 @@ void PulseNativeUi()
 			s_hidden[s_hiddenCount++] = live;
 	}
 
-	if (any)
+	if (any || s_mirror)
 		InstallDrawHook();
 	if (hotbars)
 		InstallHotButtonHook();
 
+	PulseMirror();
 	PulseSideEffectGauges();
 }
 
@@ -467,6 +543,18 @@ bool NativeUiCommand(const char* szLine)
 
 	if (ci_equals(szArg, "layout"))
 		return LayoutCommand(szLine);
+
+	if (ci_equals(szArg, "mirror"))
+	{
+		if (ci_equals(szState, "list"))
+		{
+			ListMirror();
+			return true;
+		}
+		SetMirror(ci_equals(szState, "on") ? true : ci_equals(szState, "off") ? false : !s_mirror);
+		WriteChatf("\ag[MQEQGFX]\ax mirror ui: %s", s_mirror ? "\agon\ax" : "\aroff\ax");
+		return true;
+	}
 
 	if (ci_equals(szArg, "native"))
 	{
